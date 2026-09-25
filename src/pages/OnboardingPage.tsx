@@ -35,7 +35,7 @@ import {
   CURRENCIES,
   GOALS,
   INDUSTRIES,
-  MESSAGE_TYPES,
+  CUSTOMER_MESSAGE_TYPES,
   PLATFORM_TYPES,
   REPORT_DAYS,
   SOCIAL_PLATFORMS,
@@ -621,7 +621,7 @@ export function OnboardingPage() {
                     Default message types clients receive
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {MESSAGE_TYPES.map((type) => (
+                    {CUSTOMER_MESSAGE_TYPES.map((type) => (
                       <CheckboxChip
                         key={type.value}
                         checked={form.clientMessageTypes.includes(type.value)}

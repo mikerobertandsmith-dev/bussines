@@ -232,15 +232,16 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
         return count;
       },
       async saveMailAccount(account) {
-        // One cadence for the whole list — saving the configuration aligns every
-        // customer so the batch goes out together.
+        // One cadence and one set of message types for the whole list — saving the
+        // configuration aligns every customer so the batch goes out together.
         patchData((current) => ({
           ...current,
           mailAccount: account,
           clients: current.clients.map((c) => ({
             ...c,
             frequency: account.sendFrequency,
-            nextSendAt: nextSendFrom(account.sendFrequency, c.messageTypes),
+            messageTypes: account.messageTypes,
+            nextSendAt: nextSendFrom(account.sendFrequency, account.messageTypes),
           })),
         }));
       },
@@ -491,15 +492,16 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         return targets.length;
       },
       async saveMailAccount(account) {
-        // One cadence for the whole list — saving the configuration aligns every
-        // customer so the batch goes out together.
+        // One cadence and one set of message types for the whole list — saving the
+        // configuration aligns every customer so the batch goes out together.
         patchData((current) => ({
           ...current,
           mailAccount: account,
           clients: current.clients.map((c) => ({
             ...c,
             frequency: account.sendFrequency,
-            nextSendAt: nextSendFrom(account.sendFrequency, c.messageTypes),
+            messageTypes: account.messageTypes,
+            nextSendAt: nextSendFrom(account.sendFrequency, account.messageTypes),
           })),
         }));
         if (dbEnabled) {
@@ -509,8 +511,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
               (data?.clients ?? []).map((c) =>
                 updateClientRow(c.id, {
                   frequency: account.sendFrequency,
-                  messageTypes: c.messageTypes,
-                  nextSendAt: nextSendFrom(account.sendFrequency, c.messageTypes),
+                  messageTypes: account.messageTypes,
+                  nextSendAt: nextSendFrom(account.sendFrequency, account.messageTypes),
                 }),
               ),
             );

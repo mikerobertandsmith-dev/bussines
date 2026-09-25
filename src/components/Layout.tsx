@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { UserButton } from "@clerk/clerk-react";
+import { UserButton, useClerk } from "@clerk/clerk-react";
 import {
   Bell,
   Binoculars,
@@ -8,6 +8,7 @@ import {
   ChevronDown,
   Database,
   Mail,
+  LogOut,
   Menu,
   RefreshCw,
   ShieldCheck,
@@ -42,12 +43,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         hint: "Traffic, SEO, ads & reviews",
         icon: <Binoculars size={17} />,
       },
-      {
-        id: "notifications",
-        label: "Notifications",
-        hint: "Alerts needing a decision",
-        icon: <Bell size={17} />,
-      },
     ],
   },
   {
@@ -68,6 +63,23 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
     ],
   },
 ];
+
+/**
+ * Explicit sign-out control. Only mounted when Clerk is configured, so the
+ * hook is never called without a ClerkProvider above it.
+ */
+function LogoutButton() {
+  const { signOut } = useClerk();
+  return (
+    <button
+      type="button"
+      onClick={() => void signOut()}
+      className="mt-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-medium text-slate-400 transition hover:bg-slate-800 hover:text-white"
+    >
+      <LogOut size={12} /> Log out
+    </button>
+  );
+}
 
 export const PAGE_META: Record<RouteId, { title: string; subtitle: string }> = {
   suppliers: {
@@ -101,7 +113,6 @@ export function Layout({
   navigate: (route: RouteId) => void;
   children: ReactNode;
 }) {
-  const [alertsOpen, setAlertsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -267,6 +278,7 @@ export function Layout({
               </div>
             ) : null}
 
+            {authEnabled ? <LogoutButton /> : null}
           </div>
         </aside>
 
@@ -327,9 +339,10 @@ export function Layout({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setAlertsOpen((v) => !v)}
+                  onClick={() => navigate("notifications")}
                   className="relative rounded-lg border border-slate-200 p-2 text-slate-600 transition hover:bg-slate-50"
-                  aria-label="Show alerts"
+                  aria-label="Notifications"
+                  title="Notifications"
                 >
                   <Bell size={16} />
                   {alerts.length ? (
@@ -349,53 +362,6 @@ export function Layout({
               </div>
             ) : null}
 
-            {alertsOpen ? (
-              <div className="border-t border-slate-100 bg-white px-4 py-3 sm:px-6">
-                <div className="mb-2 flex items-center justify-between">
-                  <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
-                    Action needed
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setAlertsOpen(false)}
-                    className="text-xs text-slate-500 hover:text-slate-800"
-                  >
-                    Close
-                  </button>
-                </div>
-                {alerts.length === 0 ? (
-                  <p className="text-xs text-slate-500">
-                    Nothing needs a decision right now. Alerts appear here as soon as a scan finds a
-                    price, stock, ad or review change.
-                  </p>
-                ) : (
-                  <ul className="grid gap-2 sm:grid-cols-2">
-                    {alerts.slice(0, 6).map((a) => (
-                      <li key={a.id}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            navigate(a.page);
-                            setAlertsOpen(false);
-                          }}
-                          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left transition hover:border-indigo-300 hover:bg-indigo-50/40"
-                        >
-                          <span className="flex items-center gap-2">
-                            <span
-                              className={`h-1.5 w-1.5 rounded-full ${
-                                a.severity === "urgent" ? "bg-rose-500" : "bg-amber-500"
-                              }`}
-                            />
-                            <span className="text-xs font-semibold text-slate-800">{a.title}</span>
-                          </span>
-                          <span className="mt-0.5 block text-[11px] text-slate-500">{a.detail}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ) : null}
           </header>
 
           <main className="flex-1 px-4 py-5 sm:px-6">{children}</main>

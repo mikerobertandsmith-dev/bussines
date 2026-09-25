@@ -11,19 +11,20 @@ const app = (
   </StrictMode>
 );
 
-/** Clerk hands us paths; this app routes on the hash. */
-function toHashRoute(target: string) {
-  const path = target.startsWith("#") ? target.slice(1) : target;
-  if (window.location.hash !== `#${path}`) window.location.hash = path;
-}
-
 createRoot(document.getElementById("root")!).render(
   authEnabled ? (
+    /*
+     * Clerk hosts the auth screens itself, so it needs to know where they live.
+     * These must be real paths (not hash routes) — an unset signInUrl is what
+     * makes Clerk bounce people to its hosted Account Portal instead.
+     */
     <ClerkProvider
       publishableKey={env.clerkPublishableKey}
+      signInUrl="/sign-in"
+      signUpUrl="/sign-up"
+      signInFallbackRedirectUrl="/"
+      signUpFallbackRedirectUrl="/"
       afterSignOutUrl="/"
-      routerPush={(to) => toHashRoute(to)}
-      routerReplace={(to) => toHashRoute(to)}
     >
       {app}
     </ClerkProvider>

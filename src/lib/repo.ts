@@ -438,6 +438,10 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         timezone: str((mailRes.data as Row).timezone, profile.timezone),
         dailyDigest: (mailRes.data as Row).daily_digest !== false,
         sendFrequency: ((mailRes.data as Row).send_frequency ?? "weekly") as SendFrequency,
+        messageTypes: ((mailRes.data as Row).message_types ?? [
+          "new_stock",
+          "deals",
+        ]) as MessageType[],
       }
     : {
         senderName: profile.brandName,
@@ -448,6 +452,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         timezone: profile.timezone,
         dailyDigest: true,
         sendFrequency: "weekly",
+        messageTypes: ["new_stock", "deals"],
       };
 
   const workspace: WorkspaceData = {
@@ -793,6 +798,7 @@ export async function saveMailAccountRow(businessId: string, account: MailAccoun
       timezone: account.timezone,
       daily_digest: account.dailyDigest,
       send_frequency: account.sendFrequency,
+      message_types: account.messageTypes,
     },
     { onConflict: "business_id" },
   );

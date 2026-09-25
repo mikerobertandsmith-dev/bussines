@@ -185,6 +185,8 @@ export interface MailAccount {
    * schedule, so this lives in the workspace configuration, not per client.
    */
   sendFrequency: SendFrequency;
+  /** One list of message types for the whole customer base, set in Configuration. */
+  messageTypes: MessageType[];
 }
 
 /* ---------------- My business ---------------- */

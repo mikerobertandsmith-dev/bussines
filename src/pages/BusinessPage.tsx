@@ -32,7 +32,7 @@ import {
   btnGhost,
   btnPrimary,
 } from "../components/ui";
-import { AreaChart, BarList, DeltaPill, Stars } from "../components/charts";
+import { AreaChart, BarList, DeltaPill, ProgressRing, Sparkline, Stars } from "../components/charts";
 import { useToast } from "../components/Toast";
 import { compact, money, relativeTime, shortDate } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
@@ -194,6 +194,7 @@ export function BusinessPage() {
           value={`${myBusiness.seoScore}/100`}
           delta={seoDelta}
           icon={<Search size={16} />}
+          visual={<ProgressRing value={myBusiness.seoScore} color="#4f46e5" />}
           hint={
             myBusiness.previousSeoScore
               ? `was ${myBusiness.previousSeoScore} last week`
@@ -205,6 +206,7 @@ export function BusinessPage() {
           value={`${myBusiness.geoScore}/100`}
           delta={geoDelta}
           icon={<Bot size={16} />}
+          visual={<ProgressRing value={myBusiness.geoScore} color="#0d9488" />}
           hint="cited in AI answers"
         />
         <Stat
@@ -212,12 +214,26 @@ export function BusinessPage() {
           value={compact(myBusiness.monthlyVisits)}
           delta={myBusiness.visitsChange}
           icon={<BarChart3 size={16} />}
+          visual={
+            myBusiness.traffic.length > 1 ? (
+              <Sparkline values={myBusiness.traffic.map((t) => t.visits)} color="#4f46e5" />
+            ) : null
+          }
           hint="visits in the last 30 days"
         />
         <Stat
           label="Industry rank"
           value={myBusiness.industryRank ? `#${myBusiness.industryRank}` : "—"}
           icon={<TrendingUp size={16} />}
+          visual={
+            myBusiness.industryRank && myBusiness.industryRankPrevious ? (
+              // Lower rank is better, so invert it — the line reads upward when the position improves.
+              <Sparkline
+                values={[myBusiness.industryRankPrevious, myBusiness.industryRank].map((r) => -r)}
+                color={industryDelta >= 0 ? "#059669" : "#e11d48"}
+              />
+            ) : null
+          }
           hint={`${industryDelta >= 0 ? "up" : "down"} ${Math.abs(industryDelta)} places in ${profile.industry || "your industry"}`}
         />
       </div>

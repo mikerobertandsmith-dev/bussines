@@ -10,6 +10,7 @@ export const mailAccount: MailAccount = {
   timezone: "Africa/Nairobi (GMT+3)",
   dailyDigest: true,
   sendFrequency: "weekly",
+  messageTypes: ["new_stock", "deals"],
 };
 
 export const clients: Client[] = [

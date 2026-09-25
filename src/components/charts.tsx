@@ -170,6 +170,54 @@ export function Sparkline({
   );
 }
 
+/** Compact circular percentage — the score ring used inside summary stat cards. */
+export function ProgressRing({
+  value,
+  max = 100,
+  size = 52,
+  stroke = 6,
+  color = "#4f46e5",
+}: {
+  value: number;
+  max?: number;
+  size?: number;
+  stroke?: number;
+  color?: string;
+}) {
+  const safeMax = max > 0 ? max : 100;
+  const pct = Math.max(0, Math.min(100, (value / safeMax) * 100));
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const dash = (pct / 100) * circumference;
+  return (
+    <div className="relative shrink-0" style={{ height: size, width: size }}>
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-full w-full -rotate-90">
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke="#e2e8f0"
+          strokeWidth={stroke}
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circumference}`}
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold text-slate-900">
+        {Math.round(pct)}%
+      </span>
+    </div>
+  );
+}
+
 export function Stars({ rating, size = 12 }: { rating: number; size?: number }) {
   return (
     <span className="inline-flex items-center gap-0.5" title={`${rating} / 5`}>

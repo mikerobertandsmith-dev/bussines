@@ -32,7 +32,7 @@ import {
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toast";
 import { cadenceLabel, daysAhead, money, relativeTime, shortDate, titleCase } from "../lib/format";
-import { MESSAGE_TYPES } from "../lib/options";
+import { CUSTOMER_MESSAGE_TYPES } from "../lib/options";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
 import type { Client, MailAccount, MessageType, SendFrequency } from "../lib/types";
 
@@ -53,7 +53,6 @@ const EMPTY_FORM = {
   company: "",
   industry: "Beauty & cosmetics",
   tier: "starter" as Client["tier"],
-  messageTypes: ["new_stock", "deals"] as MessageType[],
 };
 
 function subjectFor(client: Client, types: MessageType[]): string {
@@ -144,7 +143,7 @@ export function ClientsPage() {
       industry: form.industry,
       tier: form.tier,
       frequency: account.sendFrequency,
-      messageTypes: form.messageTypes,
+      messageTypes: account.messageTypes,
     });
     toast(`${form.name.trim()} added to the active customer list.`);
     setForm(EMPTY_FORM);
@@ -165,8 +164,9 @@ export function ClientsPage() {
     setQueued((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
-  function toggleFormMessageType(type: MessageType) {
-    setForm((prev) => ({
+  /** Message types are a workspace setting now, so they are edited on the account. */
+  function toggleAccountMessageType(type: MessageType) {
+    setAccount((prev) => ({
       ...prev,
       messageTypes: prev.messageTypes.includes(type)
         ? prev.messageTypes.filter((t) => t !== type)
@@ -302,8 +302,8 @@ export function ClientsPage() {
                       </Td>
                       <Td>
                         <span className="block text-xs text-slate-700">
-                          {c.messageTypes.length} message type
-                          {c.messageTypes.length === 1 ? "" : "s"}
+                          {account.messageTypes.length} message type
+                          {account.messageTypes.length === 1 ? "" : "s"}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           {cadenceLabel(account.sendFrequency)} batch
@@ -335,8 +335,8 @@ export function ClientsPage() {
           )}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
             <p className="text-[11px] text-slate-500">
-              Open a customer to change their status or message types. The send cadence is set once
-              in Configuration.
+              Open a customer to change their status. The send cadence and message types are set
+              once for everyone in Configuration.
             </p>
             <span className="text-[11px] text-slate-400">
               {clients.filter((c) => c.status === "active").length} active of {clients.length} total
@@ -386,7 +386,7 @@ export function ClientsPage() {
                       <span className="text-[11px] font-normal text-slate-500">{c.email}</span>
                     </p>
                     <p className="truncate text-[11px] text-slate-600">
-                      {subjectFor(c, c.messageTypes)}
+                      {subjectFor(c, account.messageTypes)}
                     </p>
                     <p className="mt-0.5 text-[11px] text-slate-400">
                       {cadenceLabel(account.sendFrequency)} · due {shortDate(c.nextSendAt)}
@@ -532,22 +532,6 @@ export function ClientsPage() {
               <option value="premium">Premium — {money(TIER_FEE.premium)}/mo</option>
             </select>
           </Field>
-          <div className="sm:col-span-2 lg:col-span-3">
-            <p className="mb-1.5 text-xs font-medium text-slate-600">
-              What should this customer receive?
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {MESSAGE_TYPES.map((t) => (
-                <CheckboxChip
-                  key={t.value}
-                  checked={form.messageTypes.includes(t.value)}
-                  onChange={() => toggleFormMessageType(t.value)}
-                >
-                  {t.label}
-                </CheckboxChip>
-              ))}
-            </div>
-          </div>
         </div>
       </Modal>
 
@@ -556,7 +540,7 @@ export function ClientsPage() {
         open={accountOpen}
         onClose={() => setAccountOpen(false)}
         title="Configuration"
-        subtitle="Sending cadence and the mailbox used to send alerts and receive replies"
+        subtitle="What everyone receives, how often, and the mailbox it is sent from"
         icon={<Settings2 size={16} />}
         footer={
           <>
@@ -591,6 +575,25 @@ export function ClientsPage() {
               {clients.length} customer{clients.length === 1 ? "" : "s"}.
             </p>
           </div>
+
+          <div className="border-t border-slate-100 pt-3">
+            <p className="mb-1.5 text-xs font-medium text-slate-600">What customers receive</p>
+            <div className="flex flex-wrap gap-2">
+              {CUSTOMER_MESSAGE_TYPES.map((t) => (
+                <CheckboxChip
+                  key={t.value}
+                  checked={account.messageTypes.includes(t.value)}
+                  onChange={() => toggleAccountMessageType(t.value)}
+                >
+                  {t.label}
+                </CheckboxChip>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-slate-500">
+              The same set goes to everyone on your list when you save.
+            </p>
+          </div>
+
           <Field label="Sender name">
             <input
               className={inputClass}
@@ -696,29 +699,6 @@ export function ClientsPage() {
                   { value: "prospect", label: "Prospect" },
                 ]}
               />
-            </div>
-
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-slate-600">
-                Type of message they receive
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {MESSAGE_TYPES.map((t) => (
-                  <CheckboxChip
-                    key={t.value}
-                    checked={openClient.messageTypes.includes(t.value)}
-                    onChange={() =>
-                      updateClient(openClient.id, {
-                        messageTypes: openClient.messageTypes.includes(t.value)
-                          ? openClient.messageTypes.filter((x) => x !== t.value)
-                          : [...openClient.messageTypes, t.value],
-                      })
-                    }
-                  >
-                    {t.label}
-                  </CheckboxChip>
-                ))}
-              </div>
             </div>
 
             <dl className="grid gap-2 sm:grid-cols-2">

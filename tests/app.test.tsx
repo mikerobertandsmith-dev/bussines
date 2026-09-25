@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "../src/App";
+import { LandingPage } from "../src/pages/LandingPage";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -146,9 +147,38 @@ describe("Market Watch app", () => {
     expect(text()).toContain("Inventory you should get next");
   });
 
+  it("renders the public landing page with its call to action", async () => {
+    await act(async () => {
+      root.render(<LandingPage />);
+    });
+
+    const content = text();
+    expect(content).toContain("Market Watch");
+    expect(content).toContain("Start free");
+    expect(content).toContain("Supplier feeds");
+    expect(content).toContain("How it works");
+
+    // Screen gallery renders the workspace layouts with sample data.
+    expect(content).toContain("Every screen, before you sign up.");
+    expect(content).toContain("Suppliers monitored");
+    expect(content).toContain("Competition");
+  });
+
+  it("keeps competitor alerts out of the customer messaging configuration", async () => {
+    await render();
+    click(findByText("button", "Clients"));
+    click(findByText("button", "Configuration"));
+
+    const dialog = activeDialog();
+    const content = dialog.textContent ?? "";
+    expect(content).toContain("What customers receive");
+    expect(content).toContain("Send cadence");
+    expect(content).not.toContain("Competitor alert");
+  });
+
   it("lists scan alerts on the dedicated notifications page", async () => {
     await render();
-    click(findByText("button", "Notifications"));
+    click(container.querySelector('button[aria-label="Notifications"]'));
 
     const content = text();
     expect(content).toContain("Everything your scans raised");

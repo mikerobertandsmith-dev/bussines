@@ -62,6 +62,14 @@ export const MESSAGE_TYPES: { value: MessageType; label: string; hint: string }[
   { value: "weekly_report", label: "Weekly report", hint: "SEO, GEO, traffic and actions summary" },
 ];
 
+/**
+ * What a customer can be sent. Competitor alerts stay internal to the desk —
+ * they are intelligence for the owner, not something a client subscribes to.
+ */
+export const CUSTOMER_MESSAGE_TYPES = MESSAGE_TYPES.filter(
+  (type) => type.value !== "competitor_alert",
+);
+
 export function detectedTimezone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";

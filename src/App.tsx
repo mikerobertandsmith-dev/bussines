@@ -4,13 +4,14 @@ import { Layout } from "./components/Layout";
 import { ToastProvider } from "./components/Toast";
 import { btnPrimary } from "./components/ui";
 import { authEnabled } from "./lib/env";
-import { useHashRoute } from "./lib/hooks";
+import { useHashRoute, usePublicRoute } from "./lib/hooks";
 import { useWorkspace, WorkspaceLoading, WorkspaceProvider } from "./lib/workspace";
 import { SuppliersPage } from "./pages/SuppliersPage";
 import { CompetitionPage } from "./pages/CompetitionPage";
 import { ClientsPage } from "./pages/ClientsPage";
 import { BusinessPage } from "./pages/BusinessPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
+import { LandingPage } from "./pages/LandingPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 
@@ -47,6 +48,15 @@ function LoadError({ message, onRetry }: { message: string | null; onRetry: () =
   );
 }
 
+/** Signed out → the marketing landing page, or the auth screen behind it. */
+function PublicArea() {
+  const { route } = usePublicRoute();
+  if (route === "sign-in" || route === "sign-up") {
+    return <LoginPage initialMode={route} />;
+  }
+  return <LandingPage />;
+}
+
 /** Signed in → make sure the business profile exists before showing the app. */
 function WorkspaceGate() {
   const { data, loading, error, needsOnboarding, refresh } = useWorkspace();
@@ -63,7 +73,7 @@ export function App() {
       {authEnabled ? (
         <>
           <SignedOut>
-            <LoginPage />
+            <PublicArea />
           </SignedOut>
           <SignedIn>
             <WorkspaceProvider>

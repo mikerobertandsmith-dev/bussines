@@ -277,12 +277,15 @@ export function Stat({
   delta,
   hint,
   icon,
+  visual,
 }: {
   label: string;
   value: ReactNode;
   delta?: number;
   hint?: string;
   icon?: ReactNode;
+  /** Compact chart shown beside the value — a ring for scores, a sparkline for trends. */
+  visual?: ReactNode;
 }) {
   const tone: Tone = delta === undefined ? "neutral" : delta >= 0 ? "good" : "bad";
   return (
@@ -291,7 +294,10 @@ export function Stat({
         <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">{label}</p>
         {icon ? <span className="text-slate-400">{icon}</span> : null}
       </div>
-      <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <p className="text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+        {visual ? <div className="shrink-0">{visual}</div> : null}
+      </div>
       <div className="mt-1.5 flex items-center gap-2">
         {delta !== undefined ? (
           <Badge tone={tone}>
