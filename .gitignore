@@ -4,7 +4,11 @@ dist-ssr
 *.local
 .env
 .env.*
+!.env.test
 .DS_Store
 *.log
 .vite
 coverage
+
+# Supabase CLI scratch state (never commit)
+supabase/.temp

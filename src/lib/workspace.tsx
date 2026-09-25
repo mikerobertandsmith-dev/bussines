@@ -495,7 +495,11 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       profile,
       loading,
       error,
-      needsOnboarding: Boolean(profile) && profile?.onboardingComplete === false,
+      // No profile at all means the user has never onboarded — the row is only
+      // created by finishing the wizard, so send them there instead of the
+      // error screen. A real load error still wins, otherwise connection
+      // problems would be hidden behind the onboarding form.
+      needsOnboarding: !error && profile?.onboardingComplete !== true,
       mode: "live",
       refresh: bootstrap,
       completeOnboarding,
