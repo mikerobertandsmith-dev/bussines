@@ -1,0 +1,288 @@
+import type { ReactNode } from "react";
+
+type Tone = "neutral" | "good" | "warn" | "bad" | "info" | "brand";
+
+const TONE_CLASS: Record<Tone, string> = {
+  neutral: "bg-slate-100 text-slate-600 ring-slate-200",
+  good: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  warn: "bg-amber-50 text-amber-700 ring-amber-200",
+  bad: "bg-rose-50 text-rose-700 ring-rose-200",
+  info: "bg-sky-50 text-sky-700 ring-sky-200",
+  brand: "bg-indigo-50 text-indigo-700 ring-indigo-200",
+};
+
+const TONE_BAR: Record<Tone, string> = {
+  neutral: "bg-slate-400",
+  good: "bg-emerald-500",
+  warn: "bg-amber-500",
+  bad: "bg-rose-500",
+  info: "bg-sky-500",
+  brand: "bg-indigo-500",
+};
+
+export function Card({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section
+      className={`rounded-xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}
+    >
+      {children}
+    </section>
+  );
+}
+
+export function CardHead({
+  title,
+  subtitle,
+  icon,
+  action,
+}: {
+  title: string;
+  subtitle?: string;
+  icon?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <header className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+      <div className="flex items-start gap-2.5">
+        {icon ? (
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+            {icon}
+          </span>
+        ) : null}
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+          {subtitle ? <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p> : null}
+        </div>
+      </div>
+      {action ? <div className="flex items-center gap-2">{action}</div> : null}
+    </header>
+  );
+}
+
+export function Badge({
+  children,
+  tone = "neutral",
+  className = "",
+}: {
+  children: ReactNode;
+  tone?: Tone;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${TONE_CLASS[tone]} ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+export function Stat({
+  label,
+  value,
+  delta,
+  hint,
+  icon,
+}: {
+  label: string;
+  value: ReactNode;
+  delta?: number;
+  hint?: string;
+  icon?: ReactNode;
+}) {
+  const tone: Tone = delta === undefined ? "neutral" : delta >= 0 ? "good" : "bad";
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">{label}</p>
+        {icon ? <span className="text-slate-400">{icon}</span> : null}
+      </div>
+      <p className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">{value}</p>
+      <div className="mt-1.5 flex items-center gap-2">
+        {delta !== undefined ? (
+          <Badge tone={tone}>
+            {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toFixed(1)}%
+          </Badge>
+        ) : null}
+        {hint ? <span className="text-xs text-slate-500">{hint}</span> : null}
+      </div>
+    </Card>
+  );
+}
+
+export function Meter({
+  value,
+  max = 100,
+  tone = "brand",
+  className = "",
+}: {
+  value: number;
+  max?: number;
+  tone?: Tone;
+  className?: string;
+}) {
+  const width = Math.max(2, Math.min(100, (value / max) * 100));
+  return (
+    <div className={`h-1.5 w-full overflow-hidden rounded-full bg-slate-100 ${className}`}>
+      <div className={`h-full rounded-full ${TONE_BAR[tone]}`} style={{ width: `${width}%` }} />
+    </div>
+  );
+}
+
+export function ScoreRing({
+  score,
+  label,
+  tone = "brand",
+}: {
+  score: number;
+  label: string;
+  tone?: Tone;
+}) {
+  const stroke =
+    tone === "good" ? "#059669" : tone === "warn" ? "#d97706" : tone === "bad" ? "#e11d48" : "#4f46e5";
+  const r = 34;
+  const c = 2 * Math.PI * r;
+  const dash = (Math.min(100, Math.max(0, score)) / 100) * c;
+  return (
+    <div className="flex items-center gap-4">
+      <svg viewBox="0 0 80 80" className="h-20 w-20 -rotate-90">
+        <circle cx="40" cy="40" r={r} fill="none" stroke="#e2e8f0" strokeWidth="8" />
+        <circle
+          cx="40"
+          cy="40"
+          r={r}
+          fill="none"
+          stroke={stroke}
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${c}`}
+        />
+      </svg>
+      <div>
+        <p className="text-2xl font-semibold text-slate-900">{score}</p>
+        <p className="text-xs text-slate-500">{label}</p>
+      </div>
+    </div>
+  );
+}
+
+export function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-slate-600">{label}</span>
+      {children}
+      {hint ? <span className="mt-1 block text-[11px] text-slate-400">{hint}</span> : null}
+    </label>
+  );
+}
+
+export const inputClass =
+  "w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100";
+
+export const btnPrimary =
+  "inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50";
+
+export const btnGhost =
+  "inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50";
+
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  size = "md",
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+  size?: "sm" | "md";
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={`rounded-md font-medium transition ${
+            size === "sm" ? "px-2 py-1 text-[11px]" : "px-3 py-1.5 text-xs"
+          } ${
+            value === opt.value
+              ? "bg-white text-slate-900 shadow-sm ring-1 ring-slate-200"
+              : "text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function CheckboxChip({
+  checked,
+  onChange,
+  children,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition ${
+        checked
+          ? "bg-indigo-600 text-white ring-indigo-600"
+          : "bg-white text-slate-600 ring-slate-300 hover:bg-slate-50"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function Th({ children, className = "" }: { children?: ReactNode; className?: string }) {
+  return (
+    <th
+      className={`px-3 py-2 text-left text-[11px] font-semibold tracking-wide text-slate-500 uppercase ${className}`}
+    >
+      {children}
+    </th>
+  );
+}
+
+export function Td({ children, className = "" }: { children?: ReactNode; className?: string }) {
+  return <td className={`px-3 py-2.5 text-sm text-slate-700 ${className}`}>{children}</td>;
+}
+
+export function EmptyState({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="px-4 py-10 text-center">
+      <p className="text-sm font-medium text-slate-700">{title}</p>
+      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+export const changeTone: Record<string, Tone> = {
+  new_product: "info",
+  price_change: "brand",
+  stock_change: "warn",
+  promotion: "good",
+  removed: "bad",
+};
