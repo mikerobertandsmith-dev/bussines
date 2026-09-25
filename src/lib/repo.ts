@@ -437,6 +437,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         signature: str((mailRes.data as Row).signature),
         timezone: str((mailRes.data as Row).timezone, profile.timezone),
         dailyDigest: (mailRes.data as Row).daily_digest !== false,
+        sendFrequency: ((mailRes.data as Row).send_frequency ?? "weekly") as SendFrequency,
       }
     : {
         senderName: profile.brandName,
@@ -446,6 +447,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         signature: "",
         timezone: profile.timezone,
         dailyDigest: true,
+        sendFrequency: "weekly",
       };
 
   const workspace: WorkspaceData = {
@@ -790,6 +792,7 @@ export async function saveMailAccountRow(businessId: string, account: MailAccoun
       signature: account.signature,
       timezone: account.timezone,
       daily_digest: account.dailyDigest,
+      send_frequency: account.sendFrequency,
     },
     { onConflict: "business_id" },
   );
@@ -815,6 +818,44 @@ export async function removeBuyListItem(businessId: string, recommendationId: st
     .eq("business_id", businessId)
     .eq("recommendation_id", recommendationId);
   if (error) throw new Error(error.message);
+}
+
+/* ------------------------------------------------------------ brand logo */
+
+/** Public URL of the uploaded logo, cache-busted so a replacement shows at once. */
+export async function uploadBrandLogo(ownerUserId: string, file: File): Promise<string> {
+  const db = requireSupabase();
+  const extension = (file.name.split(".").pop() ?? "png")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "") || "png";
+  const path = `${ownerUserId}/logo.${extension}`;
+
+  const { error } = await db.storage.from("brand-assets").upload(path, file, {
+    upsert: true,
+    contentType: file.type || "image/png",
+  });
+  if (error) throw new Error(error.message);
+
+  const { data } = db.storage.from("brand-assets").getPublicUrl(path);
+  return `${data.publicUrl}?v=${Date.now()}`;
+}
+
+export async function updateBrandLogo(ownerUserId: string, logoUrl: string) {
+  const db = requireSupabase();
+  const { error } = await db
+    .from("businesses")
+    .update({ logo_url: logoUrl })
+    .eq("owner_user_id", ownerUserId);
+  if (error) throw new Error(error.message);
+}
+
+/** Clears the stored logo and deletes the uploaded files behind it. */
+export async function deleteBrandLogo(ownerUserId: string) {
+  const db = requireSupabase();
+  const { data } = await db.storage.from("brand-assets").list(ownerUserId);
+  const paths = (data ?? []).map((file) => `${ownerUserId}/${file.name}`);
+  if (paths.length) await db.storage.from("brand-assets").remove(paths);
+  await updateBrandLogo(ownerUserId, "");
 }
 
 export async function markReviewScanComplete(businessId: string) {
@@ -851,6 +892,7 @@ function mapProfile(row: Row): BusinessProfile {
     ownerUserId: str(row.owner_user_id),
     ownerEmail: str(row.owner_email),
     brandName: str(row.brand_name),
+    logoUrl: str(row.logo_url),
     legalName: str(row.legal_name),
     industry: str(row.industry),
     niche: str(row.niche),

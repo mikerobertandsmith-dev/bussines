@@ -10,6 +10,7 @@ import { SuppliersPage } from "./pages/SuppliersPage";
 import { CompetitionPage } from "./pages/CompetitionPage";
 import { ClientsPage } from "./pages/ClientsPage";
 import { BusinessPage } from "./pages/BusinessPage";
+import { NotificationsPage } from "./pages/NotificationsPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 
@@ -22,6 +23,7 @@ function AppShell() {
       {route === "competition" ? <CompetitionPage /> : null}
       {route === "clients" ? <ClientsPage /> : null}
       {route === "business" ? <BusinessPage /> : null}
+      {route === "notifications" ? <NotificationsPage /> : null}
     </Layout>
   );
 }

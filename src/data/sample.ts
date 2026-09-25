@@ -39,6 +39,7 @@ export const sampleProfile: BusinessProfile = {
   ownerUserId: "sample-user",
   ownerEmail: mailAccount.loginEmail,
   brandName: "Your Retail Brand",
+  logoUrl: "",
   legalName: "",
   industry: "Beauty & electronics retail",
   niche: "Beauty & cosmetics",

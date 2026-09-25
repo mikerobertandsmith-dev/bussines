@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   Megaphone,
   MessageSquareQuote,
+  Package,
   RefreshCw,
   Search,
   Share2,
@@ -21,7 +22,9 @@ import {
   CardHead,
   EmptyState,
   Segmented,
+  SiteLogo,
   Stat,
+  Tabs,
   Td,
   Th,
   btnGhost,
@@ -34,6 +37,8 @@ import { compact, daysAgo, money, relativeTime, shortDate, titleCase } from "../
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
 import type { Cadence, KeywordGap } from "../lib/types";
 
+type CompetitionTab = "overview" | "inventory" | "keywords" | "ads" | "reviews" | "social";
+
 const CADENCE_OPTIONS = [
   { value: "daily" as Cadence, label: "Daily" },
   { value: "weekly" as Cadence, label: "Weekly" },
@@ -42,7 +47,7 @@ const CADENCE_OPTIONS = [
 
 type KeywordFilter = "all" | "high" | "none";
 
-const AUDIENCE_TABS: { value: KeywordFilter; label: string }[] = [
+const KEYWORD_TABS: { value: KeywordFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "high", label: "Top opportunity" },
   { value: "none", label: "We already rank" },
@@ -60,6 +65,7 @@ export function CompetitionPage() {
   const competitors = workspace.competitors;
   const myBusiness = workspace.metrics;
   const [activeId, setActiveId] = useState<string>(competitors[0]?.id ?? "");
+  const [tab, setTab] = useState<CompetitionTab>("overview");
   const [keywordFilter, setKeywordFilter] = useState<KeywordFilter>("all");
   const [query, setQuery] = useState("");
 
@@ -104,6 +110,9 @@ export function CompetitionPage() {
   const theirSocial = competitor.trafficSources.find((s) =>
     /social|instagram|paid/i.test(s.label),
   );
+  const ratingChange = Number(
+    (((competitor.rating - competitor.previousRating) / competitor.previousRating) * 100).toFixed(1),
+  );
 
   function createOriginalAd(headline: string) {
     toast(
@@ -113,27 +122,31 @@ export function CompetitionPage() {
 
   return (
     <div className="space-y-5">
+      {/* Pick who you are comparing against, then set the scan cadence. */}
       <Card>
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
           <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             <Binoculars size={16} className="text-indigo-600" /> Watching
           </span>
+
           {competitors.map((c) => (
             <button
               key={c.id}
               type="button"
               onClick={() => setActiveId(c.id)}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition ${
-                c.id === activeId
+              className={`flex items-center gap-2 rounded-full py-1 pr-3 pl-1 text-xs font-medium ring-1 transition ${
+                c.id === competitor.id
                   ? "bg-indigo-600 text-white ring-indigo-600"
                   : "bg-white text-slate-600 ring-slate-300 hover:bg-slate-50"
               }`}
             >
+              <SiteLogo website={c.website} name={c.name} size={22} />
               {c.name}
             </button>
           ))}
+
           <span className="ml-auto flex flex-wrap items-center gap-2">
-            <span className="text-[11px] text-slate-500">Scan this competitor</span>
+            <span className="text-[11px] text-slate-500">Scan cadence</span>
             <Segmented
               size="sm"
               options={CADENCE_OPTIONS}
@@ -180,78 +193,139 @@ export function CompetitionPage() {
         <Stat
           label="Rating (2 months)"
           value={competitor.rating.toFixed(1)}
-          delta={Number(((competitor.rating - competitor.previousRating) / competitor.previousRating) * 100)}
+          delta={ratingChange}
           icon={<MessageSquareQuote size={16} />}
-          hint={`${competitor.reviewsThisMonth} new reviews · ${negativeReviews} negative`}
+          hint={`${competitor.reviewsThisMonth} new · ${negativeReviews} negative`}
         />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
-          <CardHead
-            icon={<Globe2 size={16} />}
-            title={`${competitor.name} traffic and where it comes from`}
-            subtitle={`Last scan ${relativeTime(competitor.lastScan)} · website ${competitor.website.replace(/^https?:\/\//, "")}`}
-            action={
-              <a href={competitor.website} target="_blank" rel="noreferrer" className={btnGhost}>
-                Visit site <ExternalLink size={13} />
-              </a>
-            }
-          />
-          <div className="grid gap-5 px-4 py-4 md:grid-cols-2">
-            <AreaChart data={competitor.traffic} color="#4f46e5" />
-            <div>
-              <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
-                Traffic sources
-              </p>
-              <BarList
-                data={competitor.trafficSources.map((s) => ({ label: s.label, value: s.share }))}
-                valueFormat={(n) => `${n}%`}
-                color="#0ea5e9"
-              />
-              <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                You lead on paid social ({mySocial?.share ?? 0}% vs {theirSocial?.share ?? 0}%).
-                {competitor.trafficSources[0]
-                  ? ` Their strength is ${competitor.trafficSources[0].label.toLowerCase()} at ${competitor.trafficSources[0].share}% — that is where new stock content pays back fastest.`
-                  : " Run a scan to see where their traffic comes from."}
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "overview", label: "Overview", icon: <Globe2 size={13} /> },
+          {
+            value: "inventory",
+            label: "New inventory",
+            icon: <Package size={13} />,
+            count: competitor.newItems.length,
+          },
+          {
+            value: "keywords",
+            label: "Keywords",
+            icon: <Search size={13} />,
+            count: competitor.keywordGap.length,
+          },
+          {
+            value: "ads",
+            label: "Ads",
+            icon: <Megaphone size={13} />,
+            count: activeAds,
+          },
+          { value: "reviews", label: "Reviews", icon: <MessageSquareQuote size={13} /> },
+          { value: "social", label: "Social", icon: <Share2 size={13} /> },
+        ]}
+      />
+
+      {tab === "overview" ? (
+        <div className="grid gap-5 xl:grid-cols-3">
+          <Card className="xl:col-span-2">
+            <CardHead
+              icon={<Globe2 size={16} />}
+              title={`${competitor.name} traffic and where it comes from`}
+              subtitle={`Last scan ${relativeTime(competitor.lastScan)} · ${competitor.website.replace(/^https?:\/\//, "")}`}
+              action={
+                <a href={competitor.website} target="_blank" rel="noreferrer" className={btnGhost}>
+                  Visit site <ExternalLink size={13} />
+                </a>
+              }
+            />
+            <div className="grid gap-5 px-4 py-4 md:grid-cols-2">
+              <AreaChart data={competitor.traffic} color="#4f46e5" />
+              <div>
+                <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                  Traffic sources
+                </p>
+                <BarList
+                  data={competitor.trafficSources.map((s) => ({ label: s.label, value: s.share }))}
+                  valueFormat={(n) => `${n}%`}
+                  color="#0ea5e9"
+                />
+                <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  You lead on paid social ({mySocial?.share ?? 0}% vs {theirSocial?.share ?? 0}%).
+                  {competitor.trafficSources[0]
+                    ? ` Their strength is ${competitor.trafficSources[0].label.toLowerCase()} at ${competitor.trafficSources[0].share}% — that is where new stock content pays back fastest.`
+                    : " Run a scan to see where their traffic comes from."}
+                </div>
               </div>
             </div>
-          </div>
-        </Card>
+          </Card>
 
-        <Card>
-          <CardHead
-            icon={<Users size={16} />}
-            title="Target audience on their ads"
-            subtitle="Segments their campaigns are aimed at right now"
-          />
-          <div className="px-4 py-4">
-            <BarList
-              data={competitor.audience.map((a) => ({ label: a.segment, value: a.share }))}
-              valueFormat={(n) => `${n}%`}
-              color="#7c3aed"
-            />
-            <ul className="mt-4 space-y-2">
-              {competitor.audience.map((a) => (
-                <li key={a.segment} className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-500">Age band</span>
-                  <span className="font-medium text-slate-700">{a.ageRange}</span>
+          <div className="space-y-5">
+            <Card>
+              <CardHead
+                icon={<Users size={16} />}
+                title="Target audience on their ads"
+                subtitle="Segments their campaigns are aimed at"
+              />
+              <div className="px-4 py-4">
+                <BarList
+                  data={competitor.audience.map((a) => ({ label: a.segment, value: a.share }))}
+                  valueFormat={(n) => `${n}%`}
+                  color="#7c3aed"
+                />
+                <ul className="mt-4 space-y-2">
+                  {competitor.audience.map((a) => (
+                    <li key={a.segment} className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-500">Age band</span>
+                      <span className="font-medium text-slate-700">{a.ageRange}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Card>
+
+            <Card>
+              <CardHead
+                icon={<Target size={16} />}
+                title="Suggested move this week"
+                subtitle="Built from the traffic, keyword and review signals"
+              />
+              <ul className="space-y-2 px-4 py-4 text-xs text-slate-700">
+                <li className="rounded-lg bg-slate-50 px-3 py-2">
+                  Publish a comparison page for{" "}
+                  <span className="font-medium">{keywords[0]?.keyword ?? "their best term"}</span> —
+                  they hold position {keywords[0]?.theirRank ?? 2}.
                 </li>
-              ))}
-            </ul>
-            <p className="mt-3 rounded-lg bg-violet-50 px-3 py-2 text-[11px] text-violet-800">
-              Build a matching audience in{" "}
-              {competitor.adPlatforms[0]} for your new arrivals, but lead with your delivery promise —
-              their slow shipping is the complaint that shows up most in reviews.
-            </p>
+                <li className="rounded-lg bg-slate-50 px-3 py-2">
+                  Answer the delivery complaint in their reviews with faster-dispatch messaging on
+                  your own ads.
+                </li>
+                <li className="rounded-lg bg-slate-50 px-3 py-2">
+                  Post {Math.max(3, (competitor.social[0]?.postsPerWeek ?? 6) - 3)} extra posts a week
+                  on {competitor.social[0]?.platform ?? "Instagram"} to close the cadence gap.
+                </li>
+              </ul>
+              <div className="border-t border-slate-100 px-4 py-3">
+                <button
+                  type="button"
+                  className={btnGhost}
+                  onClick={() =>
+                    toast(`Weekly ${competitor.name} brief queued for the next client email.`)
+                  }
+                >
+                  <Download size={13} /> Queue brief for clients
+                </button>
+              </div>
+            </Card>
           </div>
-        </Card>
-      </div>
+        </div>
+      ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      {tab === "inventory" ? (
         <Card>
           <CardHead
-            icon={<Sparkles size={16} />}
+            icon={<Package size={16} />}
             title="New inventory they listed"
             subtitle="New products and restocks detected on their website"
             action={
@@ -264,10 +338,13 @@ export function CompetitionPage() {
             }
           />
           {inventory.length === 0 ? (
-            <EmptyState title="Nothing matched that search" />
+            <EmptyState
+              title="Nothing matched that search"
+              hint="Clear the search box to see every product the last scan found."
+            />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[520px]">
+              <table className="w-full min-w-[560px]">
                 <thead className="bg-slate-50">
                   <tr>
                     <Th>Product</Th>
@@ -315,7 +392,9 @@ export function CompetitionPage() {
             </div>
           )}
         </Card>
+      ) : null}
 
+      {tab === "keywords" ? (
         <Card>
           <CardHead
             icon={<Search size={16} />}
@@ -324,14 +403,17 @@ export function CompetitionPage() {
             action={
               <Segmented
                 size="sm"
-                options={AUDIENCE_TABS}
+                options={KEYWORD_TABS}
                 value={keywordFilter}
                 onChange={setKeywordFilter}
               />
             }
           />
           {keywords.length === 0 ? (
-            <EmptyState title="No keywords in this filter" />
+            <EmptyState
+              title="No keywords in this filter"
+              hint="Switch to “All” to see every tracked term."
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[640px]">
@@ -381,178 +463,181 @@ export function CompetitionPage() {
             the pages to publish this week.
           </div>
         </Card>
-      </div>
+      ) : null}
 
-      <Card>
-        <CardHead
-          icon={<Megaphone size={16} />}
-          title="Their ads and where they post them"
-          subtitle="Banner links are captured for reference only — never copy a competitor's creative"
-        />
-        <div className="flex flex-wrap gap-2 border-b border-slate-100 px-4 py-3">
-          {competitor.adPlatforms.map((p) => (
-            <Badge key={p} tone="brand">
-              {p}
-            </Badge>
-          ))}
-        </div>
-        <div className="grid gap-4 px-4 py-4 md:grid-cols-3">
-          {competitor.ads.map((ad) => (
-            <div key={ad.id} className="flex flex-col rounded-xl border border-slate-200 p-3">
-              <div className="flex items-center justify-between gap-2">
-                <Badge tone={ad.status === "active" ? "good" : "neutral"}>{ad.status}</Badge>
-                <span className="text-[11px] text-slate-500">{ad.platform}</span>
-              </div>
-              <p className="mt-2 text-sm font-semibold text-slate-900">{ad.headline}</p>
-              <p className="mt-1 text-[11px] text-slate-500">Audience: {ad.audience}</p>
-              <p className="mt-1 text-[11px] text-slate-500">
-                Focus: {ad.focus} · first seen {shortDate(ad.firstSeen)}
-              </p>
-              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                <a href={ad.bannerUrl} target="_blank" rel="noreferrer" className={btnGhost}>
-                  <ImageIcon size={13} /> Banner link
-                </a>
-                <a href={ad.landingUrl} target="_blank" rel="noreferrer" className={btnGhost}>
-                  Landing page <ExternalLink size={12} />
-                </a>
-                <button
-                  type="button"
-                  className={btnPrimary}
-                  onClick={() => createOriginalAd(ad.headline)}
-                >
-                  <Sparkles size={13} /> Build our own
-                </button>
-              </div>
+      {tab === "ads" ? (
+        <Card>
+          <CardHead
+            icon={<Megaphone size={16} />}
+            title="Their ads and where they post them"
+            subtitle="Banner links are captured for reference only — never copy a competitor's creative"
+          />
+          <div className="flex flex-wrap gap-2 border-b border-slate-100 px-4 py-3">
+            {competitor.adPlatforms.map((p) => (
+              <Badge key={p} tone="brand">
+                {p}
+              </Badge>
+            ))}
+          </div>
+          {competitor.ads.length === 0 ? (
+            <EmptyState
+              title="No ads captured yet"
+              hint="Their ad library is checked on the cadence set above."
+            />
+          ) : (
+            <div className="grid gap-4 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
+              {competitor.ads.map((ad) => (
+                <div key={ad.id} className="flex flex-col rounded-xl border border-slate-200 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge tone={ad.status === "active" ? "good" : "neutral"}>{ad.status}</Badge>
+                    <span className="text-[11px] text-slate-500">{ad.platform}</span>
+                  </div>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{ad.headline}</p>
+                  <p className="mt-1 text-[11px] text-slate-500">Audience: {ad.audience}</p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Focus: {ad.focus} · first seen {shortDate(ad.firstSeen)}
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                    <a href={ad.bannerUrl} target="_blank" rel="noreferrer" className={btnGhost}>
+                      <ImageIcon size={13} /> Banner link
+                    </a>
+                    <a href={ad.landingUrl} target="_blank" rel="noreferrer" className={btnGhost}>
+                      Landing page <ExternalLink size={12} />
+                    </a>
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      onClick={() => createOriginalAd(ad.headline)}
+                    >
+                      <Sparkles size={13} /> Build our own
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </Card>
+          )}
+          <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
+            Use competitor ads as market signals only — build original offers, wording and designs.
+            Last full competitor sweep {relativeTime(daysAgo(0, 3))}.
+          </div>
+        </Card>
+      ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
+      {tab === "reviews" ? (
+        <Card>
           <CardHead
             icon={<MessageSquareQuote size={16} />}
             title="Reviews their customers are leaving"
             subtitle={`${competitor.reviewsThisMonth} reviews this month · ${competitor.reviewCount.toLocaleString()} total`}
-            action={<DeltaPill value={Number(((competitor.rating - competitor.previousRating) / competitor.previousRating) * 100)} />}
+            action={<DeltaPill value={ratingChange} />}
           />
-          <div className="grid gap-4 px-4 py-4 md:grid-cols-2">
-            <div>
-              <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
-                Rating trend over 2 months
-              </p>
-              <AreaChart
-                data={competitor.reviewTrend}
-                color="#e11d48"
-                valueFormat={(n) => n.toFixed(2)}
-                height={120}
-              />
-              <div className="mt-3 flex items-center gap-3">
-                <Stars rating={competitor.rating} size={16} />
-                <span className="text-sm font-semibold text-slate-900">
-                  {competitor.rating.toFixed(1)}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  was {competitor.previousRating.toFixed(1)}
-                </span>
-              </div>
-            </div>
-            <ul className="space-y-2">
-              {competitor.reviews.map((r) => (
-                <li key={r.id} className="rounded-lg border border-slate-200 px-3 py-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-slate-800">{r.author}</span>
-                    <span className="flex items-center gap-2">
-                      <Stars rating={r.rating} />
-                      <Badge
-                        tone={
-                          r.sentiment === "negative"
-                            ? "bad"
-                            : r.sentiment === "positive"
-                              ? "good"
-                              : "warn"
-                        }
-                      >
-                        {r.sentiment}
-                      </Badge>
-                    </span>
-                  </div>
-                  <p className="mt-1 text-[11px] text-slate-600">{r.text}</p>
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    {r.source} · {relativeTime(r.postedAt)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </Card>
-
-        <div className="space-y-5">
-          <Card>
-            <CardHead
-              icon={<Share2 size={16} />}
-              title="Social presence"
-              subtitle="Where they publish and how much they engage"
+          {competitor.reviews.length === 0 ? (
+            <EmptyState
+              title="No reviews captured yet"
+              hint="Run a scan to pull their latest customer feedback."
             />
-            <ul className="divide-y divide-slate-100">
+          ) : (
+            <div className="grid gap-4 px-4 py-4 md:grid-cols-2">
+              <div>
+                <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                  Rating trend over 2 months
+                </p>
+                <AreaChart
+                  data={competitor.reviewTrend}
+                  color="#e11d48"
+                  valueFormat={(n) => n.toFixed(2)}
+                  height={120}
+                />
+                <div className="mt-3 flex items-center gap-3">
+                  <Stars rating={competitor.rating} size={16} />
+                  <span className="text-sm font-semibold text-slate-900">
+                    {competitor.rating.toFixed(1)}
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    was {competitor.previousRating.toFixed(1)}
+                  </span>
+                </div>
+              </div>
+              <ul className="space-y-2">
+                {competitor.reviews.map((r) => (
+                  <li key={r.id} className="rounded-lg border border-slate-200 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-800">{r.author}</span>
+                      <span className="flex items-center gap-2">
+                        <Stars rating={r.rating} />
+                        <Badge
+                          tone={
+                            r.sentiment === "negative"
+                              ? "bad"
+                              : r.sentiment === "positive"
+                                ? "good"
+                                : "warn"
+                          }
+                        >
+                          {r.sentiment}
+                        </Badge>
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-600">{r.text}</p>
+                    <p className="mt-1 text-[10px] text-slate-400">
+                      {r.source} · {relativeTime(r.postedAt)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+      ) : null}
+
+      {tab === "social" ? (
+        <Card>
+          <CardHead
+            icon={<Share2 size={16} />}
+            title="Social presence"
+            subtitle="Where they publish and how much they engage"
+          />
+          {competitor.social.length === 0 ? (
+            <EmptyState
+              title="No social channels captured yet"
+              hint="Their handles are scored on the next scan."
+            />
+          ) : (
+            <ul className="grid gap-3 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
               {competitor.social.map((s) => (
-                <li key={s.platform} className="px-4 py-3">
+                <li key={s.platform} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium text-slate-900">{s.platform}</span>
                     <span className="text-xs text-slate-500">{s.handle}</span>
                   </div>
-                  <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] text-slate-500">
-                    <span>{compact(s.followers)} followers</span>
-                    <span>Engagement {s.engagementRate}%</span>
-                    <span>{s.postsPerWeek} posts/wk</span>
-                    <span className={s.adsRunning ? "text-indigo-600" : ""}>
-                      {s.adsRunning} ads live
-                    </span>
-                  </div>
+                  <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Followers</dt>
+                      <dd className="font-semibold text-slate-900">{compact(s.followers)}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Engagement</dt>
+                      <dd className="font-semibold text-slate-900">{s.engagementRate}%</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Posts / week</dt>
+                      <dd className="font-semibold text-slate-900">{s.postsPerWeek}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Ads live</dt>
+                      <dd
+                        className={`font-semibold ${s.adsRunning ? "text-indigo-700" : "text-slate-900"}`}
+                      >
+                        {s.adsRunning}
+                      </dd>
+                    </div>
+                  </dl>
                 </li>
               ))}
             </ul>
-          </Card>
-
-          <Card>
-            <CardHead
-              icon={<Target size={16} />}
-              title="Suggested move this week"
-              subtitle="Generated from the traffic, keyword and review signals above"
-            />
-            <ul className="space-y-2 px-4 py-4 text-xs text-slate-700">
-              <li className="rounded-lg bg-slate-50 px-3 py-2">
-                Publish a comparison page for{" "}
-                <span className="font-medium">{keywords[0]?.keyword ?? "their best term"}</span> — they
-                hold position {keywords[0]?.theirRank ?? 2}.
-              </li>
-              <li className="rounded-lg bg-slate-50 px-3 py-2">
-                Answer the delivery complaint in their reviews with faster-dispatch messaging on your
-                own ads.
-              </li>
-              <li className="rounded-lg bg-slate-50 px-3 py-2">
-                Post {Math.max(3, (competitor.social[0]?.postsPerWeek ?? 6) - 3)} extra posts a week on{" "}
-                {competitor.social[0]?.platform ?? "Instagram"} to close the cadence gap.
-              </li>
-            </ul>
-            <div className="border-t border-slate-100 px-4 py-3">
-              <button
-                type="button"
-                className={btnGhost}
-                onClick={() => toast(`Weekly ${competitor.name} brief queued for the next client email.`)}
-              >
-                <Download size={13} /> Queue competitor brief for clients
-              </button>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      <p className="px-1 text-[11px] text-slate-400">
-        Reminder: use competitor updates as market signals only. Build original offers, wording and
-        designs — never reproduce their banners or copy. Last full competitor sweep{" "}
-        {relativeTime(daysAgo(0, 3))}.
-      </p>
+          )}
+        </Card>
+      ) : null}
     </div>
   );
 }

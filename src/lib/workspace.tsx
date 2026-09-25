@@ -14,6 +14,7 @@ import {
   addBuyListItem,
   createClientRow,
   createWorkspaceFromOnboarding,
+  deleteBrandLogo,
   deleteClientRow,
   fetchBusiness,
   loadWorkspace,
@@ -24,7 +25,9 @@ import {
   saveMailAccountRow,
   setCompetitorCadence,
   setSupplierCadence,
+  updateBrandLogo,
   updateClientRow,
+  uploadBrandLogo,
 } from "./repo";
 import { setAccessTokenProvider } from "./supabase";
 import { nextSendFrom } from "./schedule";
@@ -59,6 +62,18 @@ export interface WorkspaceActions {
   saveMailAccount: (account: MailAccount) => Promise<void>;
   toggleBuyList: (recommendationId: string, on: boolean) => Promise<void>;
   runReviewScan: () => Promise<void>;
+  uploadLogo: (file: File) => Promise<void>;
+  removeLogo: () => Promise<void>;
+}
+
+/** Reads a picked image as a data URL — used when no storage bucket is configured. */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Could not read that image file."));
+    reader.readAsDataURL(file);
+  });
 }
 
 export interface WorkspaceContextValue {
@@ -217,7 +232,17 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
         return count;
       },
       async saveMailAccount(account) {
-        patchData((current) => ({ ...current, mailAccount: account }));
+        // One cadence for the whole list — saving the configuration aligns every
+        // customer so the batch goes out together.
+        patchData((current) => ({
+          ...current,
+          mailAccount: account,
+          clients: current.clients.map((c) => ({
+            ...c,
+            frequency: account.sendFrequency,
+            nextSendAt: nextSendFrom(account.sendFrequency, c.messageTypes),
+          })),
+        }));
       },
       async toggleBuyList(recommendationId, on) {
         patchData((current) => ({
@@ -233,6 +258,13 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
           latestReviewScan: { ...current.latestReviewScan, scannedAt: new Date().toISOString() },
         }));
       },
+      async uploadLogo(file) {
+        const logoUrl = await fileToDataUrl(file);
+        patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl } }));
+      },
+      async removeLogo() {
+        patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl: "" } }));
+      },
     }),
     [patchData],
   );
@@ -240,7 +272,7 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
   const value = useMemo<WorkspaceContextValue>(
     () => ({
       data,
-      profile: sampleProfile,
+      profile: data.profile,
       loading: false,
       error: null,
       needsOnboarding: false,
@@ -459,8 +491,31 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         return targets.length;
       },
       async saveMailAccount(account) {
-        patchData((current) => ({ ...current, mailAccount: account }));
-        if (dbEnabled) await withBusiness((business) => saveMailAccountRow(business.id, account));
+        // One cadence for the whole list — saving the configuration aligns every
+        // customer so the batch goes out together.
+        patchData((current) => ({
+          ...current,
+          mailAccount: account,
+          clients: current.clients.map((c) => ({
+            ...c,
+            frequency: account.sendFrequency,
+            nextSendAt: nextSendFrom(account.sendFrequency, c.messageTypes),
+          })),
+        }));
+        if (dbEnabled) {
+          await withBusiness(async (business) => {
+            await saveMailAccountRow(business.id, account);
+            await Promise.all(
+              (data?.clients ?? []).map((c) =>
+                updateClientRow(c.id, {
+                  frequency: account.sendFrequency,
+                  messageTypes: c.messageTypes,
+                  nextSendAt: nextSendFrom(account.sendFrequency, c.messageTypes),
+                }),
+              ),
+            );
+          });
+        }
       },
       async toggleBuyList(recommendationId, on) {
         patchData((current) => ({
@@ -485,8 +540,31 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         }));
         if (dbEnabled) await withBusiness((business) => markReviewScanComplete(business.id));
       },
+      async uploadLogo(file) {
+        if (!dbEnabled) {
+          const logoUrl = await fileToDataUrl(file);
+          setProfile((current) => (current ? { ...current, logoUrl } : current));
+          patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl } }));
+          return;
+        }
+        if (!userId) throw new Error("You need to be signed in to upload a logo.");
+        try {
+          const logoUrl = await uploadBrandLogo(userId, file);
+          await updateBrandLogo(userId, logoUrl);
+          setProfile((current) => (current ? { ...current, logoUrl } : current));
+          patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl } }));
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not upload the logo.");
+          throw cause;
+        }
+      },
+      async removeLogo() {
+        setProfile((current) => (current ? { ...current, logoUrl: "" } : current));
+        patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl: "" } }));
+        if (dbEnabled && userId) await deleteBrandLogo(userId);
+      },
     }),
-    [data, patchData, withBusiness],
+    [data, patchData, withBusiness, userId],
   );
 
   const value = useMemo<WorkspaceContextValue>(

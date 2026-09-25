@@ -9,6 +9,7 @@ export const mailAccount: MailAccount = {
   signature: "— Market Watch Desk · Supplier & competitor alerts for your retail brand",
   timezone: "Africa/Nairobi (GMT+3)",
   dailyDigest: true,
+  sendFrequency: "weekly",
 };
 
 export const clients: Client[] = [

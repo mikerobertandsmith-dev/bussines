@@ -5,6 +5,7 @@ import {
   Bell,
   Binoculars,
   Building2,
+  ChevronDown,
   Database,
   Mail,
   Menu,
@@ -18,36 +19,76 @@ import { buildAlerts } from "../lib/alerts";
 import { authEnabled, dbEnabled, demoMode } from "../lib/env";
 import { useWorkspace } from "../lib/workspace";
 import { daysAgo } from "../lib/format";
-import { Badge } from "./ui";
+import { LogoUpload } from "./LogoUpload";
+import { Modal } from "./Modal";
+import { Badge, Logo, btnPrimary } from "./ui";
 
-const NAV: {
-  id: RouteId;
-  label: string;
-  hint: string;
-  icon: ReactNode;
-}[] = [
-  { id: "suppliers", label: "Suppliers", hint: "New stock & price changes", icon: <Truck size={18} /> },
-  { id: "competition", label: "Competition", hint: "Traffic, SEO, ads & reviews", icon: <Binoculars size={18} /> },
-  { id: "clients", label: "Clients", hint: "Email list & message schedule", icon: <Mail size={18} /> },
-  { id: "business", label: "My Business", hint: "SEO, GEO, reviews & ad assets", icon: <Building2 size={18} /> },
+type NavItem = { id: RouteId; label: string; hint: string; icon: ReactNode };
+
+/** Grouped so the sidebar reads as two jobs, not four equal buttons. */
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "Monitor",
+    items: [
+      {
+        id: "suppliers",
+        label: "Suppliers",
+        hint: "New stock & price changes",
+        icon: <Truck size={17} />,
+      },
+      {
+        id: "competition",
+        label: "Competition",
+        hint: "Traffic, SEO, ads & reviews",
+        icon: <Binoculars size={17} />,
+      },
+      {
+        id: "notifications",
+        label: "Notifications",
+        hint: "Alerts needing a decision",
+        icon: <Bell size={17} />,
+      },
+    ],
+  },
+  {
+    label: "Grow",
+    items: [
+      {
+        id: "clients",
+        label: "Clients",
+        hint: "Email list & message schedule",
+        icon: <Mail size={17} />,
+      },
+      {
+        id: "business",
+        label: "My Business",
+        hint: "SEO, GEO, reviews & ad assets",
+        icon: <Building2 size={17} />,
+      },
+    ],
+  },
 ];
 
 export const PAGE_META: Record<RouteId, { title: string; subtitle: string }> = {
   suppliers: {
     title: "Supplier updates",
-    subtitle: "What changed on your supplier websites, and the latest inventory they added",
+    subtitle: "What changed on your supplier sites, and the inventory they added",
   },
   competition: {
     title: "Competition watch",
-    subtitle: "New inventory, traffic, keyword gaps, ads, reviews and target audiences",
+    subtitle: "Traffic, keyword gaps, ads, reviews and the audiences they target",
   },
   clients: {
     title: "Client messaging desk",
-    subtitle: "Your clients' emails, active customer list and the message schedule you run",
+    subtitle: "Your customer list, the messages they receive and what has been sent",
   },
   business: {
     title: "My business",
-    subtitle: "Your SEO & GEO scores, traffic, review analysis, ad assets and stock to buy next",
+    subtitle: "Your SEO & GEO scores, traffic, reviews, ad assets and stock to buy next",
+  },
+  notifications: {
+    title: "Notifications",
+    subtitle: "Every price, stock, ad and review alert your scans raised, newest first",
   },
 };
 
@@ -62,7 +103,9 @@ export function Layout({
 }) {
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const { data } = useWorkspace();
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { data, actions } = useWorkspace();
 
   const alerts = useMemo(() => (data ? buildAlerts(data) : []), [data]);
 
@@ -75,20 +118,28 @@ export function Layout({
       : 0,
     clients: data ? data.clients.filter((c) => c.status === "active").length : 0,
     business: alerts.filter((a) => a.page === "business").length,
+    notifications: alerts.length,
   };
 
   const meta = PAGE_META[route];
   const brand = data?.profile.brandName || "Market Watch";
+  const logoUrl = data?.profile.logoUrl ?? "";
+
+  function openItem(id: RouteId) {
+    navigate(id);
+    setNavOpen(false);
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="flex min-h-screen">
         <aside
-          className={`fixed inset-y-0 left-0 z-40 w-64 shrink-0 border-r border-slate-800 bg-slate-900 px-3 py-4 text-slate-300 transition-transform lg:static lg:translate-x-0 ${
+          className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900 text-slate-300 transition-transform lg:static lg:translate-x-0 ${
             navOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <div className="flex items-center justify-between px-2">
+          {/* Brand block — plain, as it was before the profile moved to the top bar. */}
+          <div className="flex items-center justify-between px-2 pt-4">
             <div className="flex items-center gap-2">
               <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500 text-white">
                 <ShieldCheck size={18} />
@@ -108,87 +159,114 @@ export function Layout({
             </button>
           </div>
 
-          <nav className="mt-6 space-y-1">
-            {NAV.map((item) => {
-              const active = route === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    navigate(item.id);
-                    setNavOpen(false);
-                  }}
-                  className={`flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition ${
-                    active ? "bg-indigo-600 text-white" : "hover:bg-slate-800 hover:text-white"
-                  }`}
-                >
-                  <span className={active ? "text-white" : "text-slate-400"}>{item.icon}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium">{item.label}</span>
-                      <span
-                        className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
-                          active ? "bg-white/20 text-white" : "bg-slate-800 text-slate-300"
+          <nav className="mt-4 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
+            {NAV_GROUPS.map((group) => (
+              <div key={group.label}>
+                <p className="px-3 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+                  {group.label}
+                </p>
+                <div className="space-y-1">
+                  {group.items.map((item) => {
+                    const active = route === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        title={item.hint}
+                        aria-current={active ? "page" : undefined}
+                        onClick={() => openItem(item.id)}
+                        className={`group relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition ${
+                          active
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "text-slate-300 hover:bg-slate-800 hover:text-white"
                         }`}
                       >
-                        {badges[item.id]}
-                      </span>
-                    </span>
-                    <span
-                      className={`mt-0.5 block truncate text-[11px] ${
-                        active ? "text-indigo-100" : "text-slate-500"
-                      }`}
-                    >
-                      {item.hint}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
+                        <span
+                          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition ${
+                            active
+                              ? "bg-white/20 text-white"
+                              : "bg-slate-800 text-slate-400 group-hover:text-white"
+                          }`}
+                        >
+                          {item.icon}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                          {item.label}
+                        </span>
+                        {badges[item.id] > 0 ? (
+                          <span
+                            className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                              active ? "bg-white/25 text-white" : "bg-slate-800 text-slate-300"
+                            }`}
+                          >
+                            {badges[item.id]}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </nav>
 
-          <div className="mt-6 rounded-xl border border-slate-800 bg-slate-800/40 p-3">
-            <p className="flex items-center gap-1.5 text-[11px] font-medium text-slate-300">
-              <RefreshCw size={12} /> Monitoring cadence
-            </p>
-            <ul className="mt-2 space-y-1.5 text-[11px] text-slate-400">
-              <li className="flex items-center justify-between">
-                <span>Supplier feeds</span>
-                <span className="text-slate-200">
-                  {data?.suppliers.some((s) => s.cadence === "daily") ? "Daily" : "Set per source"}
-                </span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>Competitor scans</span>
-                <span className="text-slate-200">
-                  {data?.competitors.some((c) => c.cadence === "daily") ? "Daily" : "Set per source"}
-                </span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>Client check-ins</span>
-                <span className="text-slate-200">
-                  {data?.clients.length ? `${data.clients.length} scheduled` : "None yet"}
-                </span>
-              </li>
-              <li className="flex items-center justify-between">
-                <span>Review scans</span>
-                <span className="text-slate-200">Weekly</span>
-              </li>
-            </ul>
-          </div>
+          {/* Secondary workspace facts stay folded away until asked for. */}
+          <div className="mt-auto border-t border-slate-800 px-3 py-3">
+            <button
+              type="button"
+              onClick={() => setInfoOpen((v) => !v)}
+              className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-[11px] font-medium text-slate-400 transition hover:bg-slate-800 hover:text-white"
+            >
+              <span className="flex items-center gap-1.5">
+                <RefreshCw size={12} /> Monitoring cadence &amp; data
+              </span>
+              <ChevronDown
+                size={12}
+                className={`transition ${infoOpen ? "rotate-180" : ""}`}
+              />
+            </button>
 
-          <div className="mt-3 rounded-xl border border-slate-800 bg-slate-800/40 p-3 text-[11px] text-slate-400">
-            <p className="flex items-center gap-1.5 font-medium text-slate-300">
-              <Database size={12} /> Data source
-            </p>
-            <p className="mt-1.5">
-              {demoMode
-                ? "Demo mode — add Clerk and Supabase keys to store your own data."
-                : dbEnabled
-                  ? "Live — reading and writing your Supabase workspace."
-                  : "Auth connected, database not configured yet."}
-            </p>
+            {infoOpen ? (
+              <div className="mt-1 space-y-2 rounded-xl border border-slate-800 bg-slate-800/40 p-3 text-[11px] text-slate-400">
+                <ul className="space-y-1.5">
+                  {[
+                    {
+                      label: "Supplier feeds",
+                      value: data?.suppliers.some((s) => s.cadence === "daily")
+                        ? "Daily"
+                        : "Set per source",
+                    },
+                    {
+                      label: "Competitor scans",
+                      value: data?.competitors.some((c) => c.cadence === "daily")
+                        ? "Daily"
+                        : "Set per source",
+                    },
+                    {
+                      label: "Client check-ins",
+                      value: data?.clients.length ? `${data.clients.length} scheduled` : "None yet",
+                    },
+                    { label: "Review scans", value: "Weekly" },
+                  ].map((row) => (
+                    <li key={row.label} className="flex items-center justify-between gap-2">
+                      <span>{row.label}</span>
+                      <span className="text-slate-200">{row.value}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="flex items-start gap-1.5 border-t border-slate-700/60 pt-2">
+                  <Database size={12} className="mt-0.5 shrink-0" />
+                  <span>
+                    {demoMode
+                      ? "Demo mode — add Clerk and Supabase keys to store your own data."
+                      : dbEnabled
+                        ? "Live — reading and writing your Supabase workspace."
+                        : "Auth connected, database not configured yet."}
+                  </span>
+                </p>
+              </div>
+            ) : null}
+
           </div>
         </aside>
 
@@ -204,7 +282,7 @@ export function Layout({
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setNavOpen(true)}
@@ -213,9 +291,11 @@ export function Layout({
                 >
                   <Menu size={16} />
                 </button>
-                <div>
-                  <h1 className="text-lg font-semibold tracking-tight text-slate-900">{meta.title}</h1>
-                  <p className="text-xs text-slate-500">{meta.subtitle}</p>
+                <div className="min-w-0">
+                  <h1 className="truncate text-lg font-semibold tracking-tight text-slate-900">
+                    {meta.title}
+                  </h1>
+                  <p className="hidden text-xs text-slate-500 sm:block">{meta.subtitle}</p>
                 </div>
               </div>
 
@@ -227,6 +307,24 @@ export function Layout({
                 ) : (
                   <Badge tone="info">Sample data</Badge>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  title="Business profile"
+                  aria-label="Business profile"
+                  className="flex items-center gap-2 rounded-lg border border-slate-200 py-1 pr-2.5 pl-1 text-slate-600 transition hover:bg-slate-50"
+                >
+                  <Logo
+                    src={logoUrl}
+                    name={brand}
+                    size={26}
+                    className="bg-indigo-500 text-[10px] text-white"
+                  />
+                  <span className="hidden max-w-40 truncate text-xs font-medium text-slate-700 sm:block">
+                    {brand}
+                  </span>
+                  <ChevronDown size={13} className="text-slate-400" />
+                </button>
                 <button
                   type="button"
                   onClick={() => setAlertsOpen((v) => !v)}
@@ -310,6 +408,54 @@ export function Layout({
           </footer>
         </div>
       </div>
+
+      <Modal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        title="Business profile"
+        subtitle="Your logo and workspace identity"
+        icon={<Building2 size={16} />}
+        footer={
+          <button type="button" className={btnPrimary} onClick={() => setSettingsOpen(false)}>
+            Done
+          </button>
+        }
+      >
+        <div className="space-y-5 px-4 py-4">
+          <div>
+            <p className="mb-3 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+              Business logo
+            </p>
+            <LogoUpload
+              logoUrl={logoUrl}
+              brandName={brand}
+              onPick={(file) => actions.uploadLogo(file)}
+              onRemove={() => actions.removeLogo()}
+            />
+          </div>
+
+          <dl className="grid gap-2 sm:grid-cols-2">
+            {[
+              { label: "Brand name", value: data?.profile.brandName || "—" },
+              { label: "Industry", value: data?.profile.industry || "—" },
+              { label: "Website", value: data?.profile.primaryDomain || "—" },
+              { label: "Alerts to", value: data?.profile.notificationEmail || "—" },
+              { label: "Currency", value: data?.profile.currency || "—" },
+              { label: "Timezone", value: data?.profile.timezone || "—" },
+            ].map((row) => (
+              <div key={row.label} className="rounded-lg bg-slate-50 px-3 py-2">
+                <dt className="text-[10px] tracking-wide text-slate-500 uppercase">{row.label}</dt>
+                <dd className="truncate text-xs font-medium text-slate-800">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+
+          <p className="text-[11px] text-slate-500">
+            Other business details come from your setup answers. Re-run setup from the workspace to
+            change suppliers, competitors and clients.
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -1,4 +1,7 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
+import { ChevronDown } from "lucide-react";
+import { domainFromUrl } from "../lib/format";
 
 type Tone = "neutral" | "good" | "warn" | "bad" | "info" | "brand";
 
@@ -62,6 +65,191 @@ export function CardHead({
       </div>
       {action ? <div className="flex items-center gap-2">{action}</div> : null}
     </header>
+  );
+}
+
+export function Tabs<T extends string>({
+  options,
+  value,
+  onChange,
+  className = "",
+}: {
+  options: { value: T; label: string; icon?: ReactNode; count?: number }[];
+  value: T;
+  onChange: (value: T) => void;
+  className?: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      className={`flex gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${className}`}
+    >
+      {options.map((opt) => {
+        const active = opt.value === value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(opt.value)}
+            className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+              active
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            }`}
+          >
+            {opt.icon}
+            {opt.label}
+            {opt.count !== undefined ? (
+              <span
+                className={`rounded-full px-1.5 text-[10px] font-semibold ${
+                  active ? "bg-white/25 text-white" : "bg-slate-100 text-slate-500"
+                }`}
+              >
+                {opt.count}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Business logo: uploaded image when set, initials block otherwise. */
+export function Logo({
+  src,
+  name,
+  size = 36,
+  className = "",
+}: {
+  src?: string | null;
+  name: string;
+  size?: number;
+  className?: string;
+}) {
+  const initials =
+    name
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((word) => word[0]?.toUpperCase() ?? "")
+      .join("") || "MW";
+
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt={`${name} logo`}
+        style={{ height: size, width: size }}
+        className={`shrink-0 rounded-xl bg-white object-cover ring-1 ring-slate-200 ${className}`}
+      />
+    );
+  }
+
+  return (
+    <span
+      aria-hidden
+      style={{ height: size, width: size, fontSize: Math.round(size * 0.36) }}
+      className={`flex shrink-0 items-center justify-center rounded-xl font-semibold ${className}`}
+    >
+      {initials}
+    </span>
+  );
+}
+
+/**
+ * A monitored site's own logo, taken from the favicon it publishes. Falls back
+ * to the brand initials block when the site has no favicon or it will not load.
+ */
+export function SiteLogo({
+  website,
+  name,
+  size = 28,
+  className = "",
+}: {
+  website: string;
+  name: string;
+  size?: number;
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const domain = domainFromUrl(website);
+
+  if (!domain || failed) {
+    return (
+      <Logo name={name} size={size} className={className || "bg-slate-100 text-slate-500"} />
+    );
+  }
+
+  return (
+    <img
+      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=${
+        size > 32 ? 128 : 64
+      }`}
+      alt={`${name} logo`}
+      width={size}
+      height={size}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      style={{ height: size, width: size }}
+      className={`shrink-0 rounded-lg bg-white object-contain ring-1 ring-slate-200 ${className}`}
+    />
+  );
+}
+
+const NOTICE_TONE = {
+  warn: "border-amber-200 bg-amber-50/70 text-amber-900",
+  info: "border-indigo-200 bg-indigo-50/70 text-indigo-900",
+  bad: "border-rose-200 bg-rose-50/70 text-rose-900",
+} as const;
+
+/**
+ * A one-line summary that keeps its detail list collapsed, so a page opens with
+ * the headline rather than every item it is flagging.
+ */
+export function Notice({
+  tone = "warn",
+  icon,
+  title,
+  children,
+  defaultOpen = false,
+}: {
+  tone?: keyof typeof NOTICE_TONE;
+  icon?: ReactNode;
+  title: string;
+  children?: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className={`rounded-xl border ${NOTICE_TONE[tone]}`}>
+      <div className="flex items-start gap-3 px-4 py-3">
+        {icon ? (
+          <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/80">
+            {icon}
+          </span>
+        ) : null}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold">{title}</p>
+            {children ? (
+              <button
+                type="button"
+                onClick={() => setOpen((v) => !v)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium underline-offset-2 opacity-80 hover:underline hover:opacity-100"
+              >
+                {open ? "Hide details" : "See details"}
+                <ChevronDown size={12} className={`transition ${open ? "rotate-180" : ""}`} />
+              </button>
+            ) : null}
+          </div>
+          {children && open ? <div className="mt-1.5">{children}</div> : null}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -275,6 +463,24 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
     <div className="px-4 py-10 text-center">
       <p className="text-sm font-medium text-slate-700">{title}</p>
       {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+    </div>
+  );
+}
+
+/** Small label/value pair used inside detail modals. */
+export function Detail({
+  label,
+  children,
+  className = "",
+}: {
+  label: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-lg bg-slate-50 px-3 py-2 ${className}`}>
+      <dt className="text-[10px] tracking-wide text-slate-500 uppercase">{label}</dt>
+      <dd className="mt-0.5 text-xs font-medium text-slate-800">{children}</dd>
     </div>
   );
 }

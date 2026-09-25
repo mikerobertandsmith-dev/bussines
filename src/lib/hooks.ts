@@ -26,9 +26,20 @@ export function usePersistentState<T>(key: string, initial: T) {
   return [state, setState, reset] as const;
 }
 
-export type RouteId = "suppliers" | "competition" | "clients" | "business";
+export type RouteId =
+  | "suppliers"
+  | "competition"
+  | "clients"
+  | "business"
+  | "notifications";
 
-const ROUTES: RouteId[] = ["suppliers", "competition", "clients", "business"];
+const ROUTES: RouteId[] = [
+  "suppliers",
+  "competition",
+  "clients",
+  "business",
+  "notifications",
+];
 
 function parseHash(): RouteId {
   const raw = window.location.hash.replace(/^#\/?/, "");

@@ -30,7 +30,7 @@ function click(el: Element | null | undefined) {
   });
 }
 
-function typeInto(input: HTMLInputElement | null, value: string) {
+function typeInto(input: HTMLInputElement | null | undefined, value: string) {
   if (!input) throw new Error("input not found");
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
   act(() => {
@@ -42,6 +42,18 @@ function typeInto(input: HTMLInputElement | null, value: string) {
 function findByText(selector: string, label: string) {
   return Array.from(container.querySelectorAll(selector)).find((el) =>
     (el.textContent ?? "").includes(label),
+  );
+}
+
+function activeDialog() {
+  const dialog = container.querySelector('[role="dialog"]');
+  if (!dialog) throw new Error("no dialog is open");
+  return dialog;
+}
+
+function dialogButton(label: string) {
+  return Array.from(activeDialog().querySelectorAll("button")).find((b) =>
+    (b.textContent ?? "").includes(label),
   );
 }
 
@@ -57,34 +69,48 @@ describe("Market Watch app", () => {
     const content = await render();
     expect(content).toContain("Supplier updates");
     expect(content).toContain("Latest inventory from your suppliers");
-    expect(content).toContain("Monitored supplier sites");
     expect(content).toContain("Velvet Matte Lip Kit");
-    expect(content).toContain("Scan now");
-    expect(content).toContain("Daily");
+
+    // Monitored suppliers live in their own Watching section, above the table.
+    expect(text()).toContain("Watching");
+    expect(text()).toContain("Scan now");
+    expect(text()).toContain("Daily");
   });
 
   it("navigates to the competition page and shows ad, keyword and review signals", async () => {
     await render();
     click(findByText("button", "Competition"));
-    const content = text();
-    expect(content).toContain("Competition watch");
-    expect(content).toContain("GlowMart Beauty");
-    expect(content).toContain("traffic and where it comes from");
-    expect(content).toContain("Keyword & SEO gap vs your platform");
-    expect(content).toContain("Banner link");
-    expect(content).toContain("Reviews their customers are leaving");
+    expect(text()).toContain("Competition watch");
+    expect(text()).toContain("GlowMart Beauty");
+    expect(text()).toContain("traffic and where it comes from");
+
+    click(findByText("button", "Keywords"));
+    expect(text()).toContain("Keyword & SEO gap vs your platform");
+
+    click(findByText("button", "Ads"));
+    expect(text()).toContain("Banner link");
+
+    click(findByText("button", "Reviews"));
+    expect(text()).toContain("Reviews their customers are leaving");
   });
 
-  it("adds a customer on the clients page", async () => {
+  it("adds a customer on the clients page from the add-customer dialog", async () => {
     await render();
     click(findByText("button", "Clients"));
-    expect(text()).toContain("Add a current active customer");
-
-    const inputs = container.querySelectorAll("input");
-    typeInto(inputs[0] as HTMLInputElement, "Test Retailer");
-    typeInto(inputs[1] as HTMLInputElement, "owner@testretailer.com");
+    expect(text()).toContain("Customer list");
 
     click(findByText("button", "Add customer"));
+    const dialog = activeDialog();
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="e.g. Amina Yusuf"]'),
+      "Test Retailer",
+    );
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="name@theirstore.com"]'),
+      "owner@testretailer.com",
+    );
+
+    click(dialogButton("Add customer"));
     await act(async () => {});
 
     const content = text();
@@ -103,13 +129,38 @@ describe("Market Watch app", () => {
   it("shows scores, rankings and ad assets on the my business page", async () => {
     await render();
     click(findByText("button", "My Business"));
+    expect(text()).toContain("My business");
+    expect(text()).toContain("SEO score");
+
+    click(findByText("button", "SEO & GEO"));
+    expect(text()).toContain("Top ranking SEO keywords this week");
+    expect(text()).toContain("Top ranking GEO prompts this week");
+
+    click(findByText("button", "Reviews"));
+    expect(text()).toContain("Review page analysis");
+
+    click(findByText("button", "Ad assets"));
+    expect(text()).toContain("Download pack");
+
+    click(findByText("button", "Buy list"));
+    expect(text()).toContain("Inventory you should get next");
+  });
+
+  it("lists scan alerts on the dedicated notifications page", async () => {
+    await render();
+    click(findByText("button", "Notifications"));
+
     const content = text();
-    expect(content).toContain("My business");
-    expect(content).toContain("SEO score");
-    expect(content).toContain("Top ranking SEO keywords this week");
-    expect(content).toContain("Top ranking GEO prompts this week");
-    expect(content).toContain("Review page analysis");
-    expect(content).toContain("Download pack");
-    expect(content).toContain("Inventory you should get next");
+    expect(content).toContain("Everything your scans raised");
+    expect(content).toContain("Needs action");
+    expect(content).toContain("All notifications");
+  });
+
+  it("opens the business profile dialog with the logo uploader", async () => {
+    await render();
+    click(container.querySelector('button[aria-label="Business profile"]'));
+    const dialog = activeDialog();
+    expect(dialog.textContent ?? "").toContain("Business logo");
+    expect(dialog.textContent ?? "").toContain("Upload logo");
   });
 });

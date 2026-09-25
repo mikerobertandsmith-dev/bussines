@@ -75,6 +75,20 @@ export function cadenceLabel(c: string): string {
   }
 }
 
+/** Host of a website URL, e.g. "supply.lumierecosmetics.com". Empty when unusable. */
+export function domainFromUrl(url: string): string {
+  const raw = (url ?? "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw).hostname.replace(/^www\./, "");
+  } catch {
+    return raw
+      .replace(/^https?:\/\//, "")
+      .split(/[/?#]/)[0]
+      .replace(/^www\./, "");
+  }
+}
+
 export function titleCase(value: string): string {
   return value
     .split("_")

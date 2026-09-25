@@ -180,6 +180,11 @@ export interface MailAccount {
   timezone: string;
   dailyDigest: boolean;
   secondaryEmail: string;
+  /**
+   * One cadence for the whole list — every customer is mailed on the same
+   * schedule, so this lives in the workspace configuration, not per client.
+   */
+  sendFrequency: SendFrequency;
 }
 
 /* ---------------- My business ---------------- */
@@ -265,6 +270,8 @@ export interface BusinessProfile {
   ownerUserId: string;
   ownerEmail: string;
   brandName: string;
+  /** Public URL of the uploaded brand logo, empty when none was uploaded. */
+  logoUrl: string;
   legalName: string;
   industry: string;
   niche: string;

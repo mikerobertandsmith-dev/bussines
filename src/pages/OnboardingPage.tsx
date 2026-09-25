@@ -28,6 +28,7 @@ import {
   btnPrimary,
   inputClass,
 } from "../components/ui";
+import { LogoUpload } from "../components/LogoUpload";
 import { useWorkspace } from "../lib/workspace";
 import {
   AD_PLATFORMS,
@@ -65,12 +66,14 @@ function emptySource(cadence: Cadence, category = ""): MonitoringSourceInput {
 
 export function OnboardingPage() {
   const { user } = useUser();
-  const { completeOnboarding, profile } = useWorkspace();
+  const { completeOnboarding, profile, actions } = useWorkspace();
   const email = user?.primaryEmailAddress?.emailAddress ?? "";
 
   const [step, setStep] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState("");
 
   const [form, setForm] = useState<OnboardingInput>(() => ({
     brandName: "",
@@ -147,6 +150,18 @@ export function OnboardingPage() {
     });
   }
 
+  function chooseLogo(file: File) {
+    if (logoPreview) URL.revokeObjectURL(logoPreview);
+    setLogoFile(file);
+    setLogoPreview(URL.createObjectURL(file));
+  }
+
+  function clearLogo() {
+    if (logoPreview) URL.revokeObjectURL(logoPreview);
+    setLogoFile(null);
+    setLogoPreview("");
+  }
+
   async function finish() {
     setSubmitting(true);
     setError(null);
@@ -159,6 +174,9 @@ export function OnboardingPage() {
         competitors: filledCompetitors,
         seedClients: filledClients,
       });
+      // Uploaded after the business row exists, because the file is stored
+      // under the signed-in user's folder in the brand-assets bucket.
+      if (logoFile) await actions.uploadLogo(logoFile);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "We could not save your answers. Try again.");
     } finally {
@@ -309,6 +327,19 @@ export function OnboardingPage() {
                       ))}
                     </select>
                   </Field>
+                </div>
+
+                <div className="border-t border-slate-100 px-4 py-4">
+                  <p className="mb-3 text-xs font-medium text-slate-600">
+                    Business logo <span className="font-normal text-slate-400">(optional)</span>
+                  </p>
+                  <LogoUpload
+                    logoUrl={logoPreview}
+                    brandName={form.brandName}
+                    onPick={chooseLogo}
+                    onRemove={clearLogo}
+                    hint="Shown in your sidebar so you always know which workspace you are in."
+                  />
                 </div>
               </Card>
             ) : null}

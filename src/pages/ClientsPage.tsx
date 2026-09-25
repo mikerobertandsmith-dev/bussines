@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import {
   AtSign,
   CalendarClock,
-  CheckCircle2,
+  ChevronRight,
   Mail,
   MessageSquare,
   Plus,
@@ -17,21 +17,26 @@ import {
   Card,
   CardHead,
   CheckboxChip,
+  Detail,
   EmptyState,
   Field,
   Segmented,
   Stat,
+  Tabs,
   Td,
   Th,
+  btnGhost,
   btnPrimary,
   inputClass,
 } from "../components/ui";
+import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toast";
 import { cadenceLabel, daysAhead, money, relativeTime, shortDate, titleCase } from "../lib/format";
 import { MESSAGE_TYPES } from "../lib/options";
-import { nextSendFrom } from "../lib/schedule";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
 import type { Client, MailAccount, MessageType, SendFrequency } from "../lib/types";
+
+type ClientTab = "customers" | "schedule" | "activity";
 
 const FREQUENCIES: { value: SendFrequency; label: string; days: number }[] = [
   { value: "every_2_days", label: "Every 2 days", days: 2 },
@@ -41,6 +46,15 @@ const FREQUENCIES: { value: SendFrequency; label: string; days: number }[] = [
 ];
 
 const TIER_FEE: Record<Client["tier"], number> = { starter: 180, growth: 320, premium: 480 };
+
+const EMPTY_FORM = {
+  name: "",
+  email: "",
+  company: "",
+  industry: "Beauty & cosmetics",
+  tier: "starter" as Client["tier"],
+  messageTypes: ["new_stock", "deals"] as MessageType[],
+};
 
 function subjectFor(client: Client, types: MessageType[]): string {
   const primary = types[0] ?? "weekly_report";
@@ -62,8 +76,6 @@ function subjectFor(client: Client, types: MessageType[]): string {
   }
 }
 
-
-
 export function ClientsPage() {
   const toast = useToast();
   const workspace = useWorkspaceData();
@@ -72,21 +84,17 @@ export function ClientsPage() {
   const sent = workspace.sentMessages;
   const [account, setAccount] = useState<MailAccount>(workspace.mailAccount);
 
-  const [selectedId, setSelectedId] = useState<string>(workspace.clients[0]?.id ?? "");
+  const [tab, setTab] = useState<ClientTab>("customers");
+  const [addOpen, setAddOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [openClientId, setOpenClientId] = useState<string | null>(null);
+
   const [queued, setQueued] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<"active" | "paused" | "prospect" | "all">("active");
   const [search, setSearch] = useState("");
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    company: "",
-    industry: "Beauty & cosmetics",
-    tier: "starter" as Client["tier"],
-    frequency: "weekly" as SendFrequency,
-    messageTypes: ["new_stock", "deals"] as MessageType[],
-  });
+  const [form, setForm] = useState(EMPTY_FORM);
 
-  const selected = clients.find((c) => c.id === selectedId) ?? clients[0];
+  const openClient = clients.find((c) => c.id === openClientId) ?? null;
 
   const visible = clients
     .filter((c) => (statusFilter === "all" ? true : c.status === statusFilter))
@@ -109,8 +117,7 @@ export function ClientsPage() {
     const avgOpen = active.length
       ? Math.round(active.reduce((sum, c) => sum + c.openRate, 0) / active.length)
       : 0;
-    const mrr = active.reduce((sum, c) => sum + c.monthlyFee, 0);
-    return { active: active.length, total: clients.length, avgOpen, mrr };
+    return { active: active.length, total: clients.length, avgOpen };
   }, [clients]);
 
   function updateClient(id: string, patch: Partial<Client>) {
@@ -136,19 +143,12 @@ export function ClientsPage() {
       company: form.company.trim() || form.name.trim(),
       industry: form.industry,
       tier: form.tier,
-      frequency: form.frequency,
+      frequency: account.sendFrequency,
       messageTypes: form.messageTypes,
     });
-    setForm({
-      name: "",
-      email: "",
-      company: "",
-      industry: "Beauty & cosmetics",
-      tier: "starter",
-      frequency: "weekly",
-      messageTypes: ["new_stock", "deals"],
-    });
     toast(`${form.name.trim()} added to the active customer list.`);
+    setForm(EMPTY_FORM);
+    setAddOpen(false);
   }
 
   function sendTo(ids: string[]) {
@@ -176,11 +176,10 @@ export function ClientsPage() {
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-3">
         <Stat
           label="Active customers"
           value={stats.active}
-          delta={8.3}
           icon={<Users size={16} />}
           hint={`${stats.total} on the list`}
         />
@@ -193,201 +192,42 @@ export function ClientsPage() {
         <Stat
           label="Average open rate"
           value={`${stats.avgOpen}%`}
-          delta={2.6}
           icon={<Mail size={16} />}
           hint="across active customers"
         />
-        <Stat
-          label="Recurring revenue"
-          value={money(stats.mrr)}
-          icon={<CheckCircle2 size={16} />}
-          hint="per month from active plans"
-        />
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
-          <CardHead
-            icon={<UserPlus size={16} />}
-            title="Add a current active customer"
-            subtitle="New customers start receiving alerts from their first scheduled send"
-          />
-          <div className="grid gap-3 px-4 py-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Field label="Customer name">
-              <input
-                className={inputClass}
-                placeholder="e.g. Amina Yusuf"
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </Field>
-            <Field label="Customer email">
-              <input
-                className={inputClass}
-                placeholder="name@theirstore.com"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-              />
-            </Field>
-            <Field label="Company / store">
-              <input
-                className={inputClass}
-                placeholder="e.g. Glow House Store"
-                value={form.company}
-                onChange={(e) => setForm({ ...form, company: e.target.value })}
-              />
-            </Field>
-            <Field label="Industry">
-              <select
-                className={inputClass}
-                value={form.industry}
-                onChange={(e) => setForm({ ...form, industry: e.target.value })}
-              >
-                {[
-                  "Beauty & cosmetics",
-                  "Fashion",
-                  "Phones & electronics",
-                  "Home appliances",
-                  "Auto parts",
-                ].map((i) => (
-                  <option key={i}>{i}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Plan">
-              <select
-                className={inputClass}
-                value={form.tier}
-                onChange={(e) =>
-                  setForm({ ...form, tier: e.target.value as Client["tier"] })
-                }
-              >
-                <option value="starter">Starter — {money(TIER_FEE.starter)}/mo</option>
-                <option value="growth">Growth — {money(TIER_FEE.growth)}/mo</option>
-                <option value="premium">Premium — {money(TIER_FEE.premium)}/mo</option>
-              </select>
-            </Field>
-            <Field label="Messaging frequency">
-              <select
-                className={inputClass}
-                value={form.frequency}
-                onChange={(e) =>
-                  setForm({ ...form, frequency: e.target.value as SendFrequency })
-                }
-              >
-                {FREQUENCIES.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <div className="sm:col-span-2 lg:col-span-3">
-              <p className="mb-1.5 text-xs font-medium text-slate-600">
-                What should this customer receive?
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {MESSAGE_TYPES.map((t) => (
-                  <CheckboxChip
-                    key={t.value}
-                    checked={form.messageTypes.includes(t.value)}
-                    onChange={() => toggleFormMessageType(t.value)}
-                  >
-                    {t.label}
-                  </CheckboxChip>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-3 border-t border-slate-100 px-4 py-3">
-            <p className="text-[11px] text-slate-500">
-              Login email used to sign in: <span className="font-medium">{account.loginEmail}</span>
-            </p>
-            <button type="button" className={btnPrimary} onClick={addClient}>
-              <Plus size={14} /> Add customer
-            </button>
-          </div>
-        </Card>
+      {/* Actions live here so each tab stays a read-only view. */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+        <button type="button" className={btnPrimary} onClick={() => setAddOpen(true)}>
+          <Plus size={14} /> Add customer
+        </button>
+        <button type="button" className={btnGhost} onClick={() => setAccountOpen(true)}>
+          <Settings2 size={14} /> Configuration
+        </button>
+        <span className="ml-auto text-[11px] text-slate-500">
+          Sending from <span className="font-medium text-slate-700">{account.loginEmail}</span> ·{" "}
+          {account.dailyDigest ? "daily digest on" : "digest off"}
+        </span>
+      </div>
 
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: "customers", label: "Customer list", icon: <Users size={13} />, count: clients.length },
+          {
+            value: "schedule",
+            label: "Send queue",
+            icon: <Send size={13} />,
+            count: dueQueue.filter((c) => new Date(c.nextSendAt) < new Date(daysAhead(2))).length,
+          },
+          { value: "activity", label: "Sent activity", icon: <Mail size={13} />, count: sent.length },
+        ]}
+      />
+
+      {tab === "customers" ? (
         <Card>
-          <CardHead
-            icon={<Settings2 size={16} />}
-            title="My email account"
-            subtitle="The mailbox used to log in, send alerts and receive replies"
-            action={
-              <Badge tone={account.dailyDigest ? "good" : "neutral"}>
-                {account.dailyDigest ? "Daily digest on" : "Digest off"}
-              </Badge>
-            }
-          />
-          <div className="space-y-3 px-4 py-4">
-            <Field label="Sender name">
-              <input
-                className={inputClass}
-                value={account.senderName}
-                onChange={(e) => setAccount({ ...account, senderName: e.target.value })}
-              />
-            </Field>
-            <Field label="Login email (alerts are sent from here)" hint="Also the address customers reply to by default">
-              <input
-                className={inputClass}
-                value={account.loginEmail}
-                onChange={(e) => setAccount({ ...account, loginEmail: e.target.value })}
-              />
-            </Field>
-            <Field label="Reply-to address">
-              <input
-                className={inputClass}
-                value={account.replyTo}
-                onChange={(e) => setAccount({ ...account, replyTo: e.target.value })}
-              />
-            </Field>
-            <Field label="Second email (owner copies)">
-              <input
-                className={inputClass}
-                value={account.secondaryEmail}
-                onChange={(e) => setAccount({ ...account, secondaryEmail: e.target.value })}
-              />
-            </Field>
-            <Field label="Timezone">
-              <input
-                className={inputClass}
-                value={account.timezone}
-                onChange={(e) => setAccount({ ...account, timezone: e.target.value })}
-              />
-            </Field>
-            <Field label="Email signature">
-              <textarea
-                className={`${inputClass} h-20 resize-none`}
-                value={account.signature}
-                onChange={(e) => setAccount({ ...account, signature: e.target.value })}
-              />
-            </Field>
-            <label className="flex items-center gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-300"
-                checked={account.dailyDigest}
-                onChange={(e) => setAccount({ ...account, dailyDigest: e.target.checked })}
-              />
-              Send me a daily digest of everything that was sent
-            </label>
-            <button
-              type="button"
-              className={`${btnPrimary} w-full justify-center`}
-              onClick={() => {
-                void actions.saveMailAccount(account);
-                toast("Email account settings saved.");
-              }}
-            >
-              Save email settings
-            </button>
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid gap-5 xl:grid-cols-3">
-        <Card className="xl:col-span-2">
           <CardHead
             icon={<Users size={16} />}
             title="Customer list"
@@ -415,16 +255,18 @@ export function ClientsPage() {
             }
           />
           {visible.length === 0 ? (
-            <EmptyState title="No customers in this view" hint="Add one above or switch the filter." />
+            <EmptyState
+              title="No customers in this view"
+              hint="Add a customer or switch the status filter."
+            />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[820px]">
+              <table className="w-full min-w-[720px]">
                 <thead className="bg-slate-50">
                   <tr>
                     <Th>Customer</Th>
                     <Th>Email</Th>
                     <Th>Status</Th>
-                    <Th>Frequency</Th>
                     <Th>Messages</Th>
                     <Th>Next send</Th>
                     <Th />
@@ -434,10 +276,8 @@ export function ClientsPage() {
                   {visible.map((c) => (
                     <tr
                       key={c.id}
-                      className={`cursor-pointer align-top hover:bg-slate-50/70 ${
-                        c.id === selectedId ? "bg-indigo-50/40" : ""
-                      }`}
-                      onClick={() => setSelectedId(c.id)}
+                      onClick={() => setOpenClientId(c.id)}
+                      className="cursor-pointer align-top hover:bg-slate-50/70"
                     >
                       <Td>
                         <span className="block font-medium text-slate-900">{c.name}</span>
@@ -461,34 +301,12 @@ export function ClientsPage() {
                         <span className="mt-1 block text-[11px] text-slate-500">{c.tier} plan</span>
                       </Td>
                       <Td>
-                        <select
-                          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs"
-                          value={c.frequency}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => {
-                            const frequency = e.target.value as SendFrequency;
-                            updateClient(c.id, {
-                              frequency,
-                              messageTypes: c.messageTypes,
-                              nextSendAt: nextSendFrom(frequency, c.messageTypes),
-                            });
-                          }}
-                        >
-                          {FREQUENCIES.map((f) => (
-                            <option key={f.value} value={f.value}>
-                              {f.label}
-                            </option>
-                          ))}
-                        </select>
-                      </Td>
-                      <Td>
-                        <span className="flex flex-wrap gap-1">
-                          {c.messageTypes.slice(0, 3).map((t) => (
-                            <Badge key={t}>{titleCase(t)}</Badge>
-                          ))}
-                          {c.messageTypes.length > 3 ? (
-                            <Badge tone="brand">+{c.messageTypes.length - 3}</Badge>
-                          ) : null}
+                        <span className="block text-xs text-slate-700">
+                          {c.messageTypes.length} message type
+                          {c.messageTypes.length === 1 ? "" : "s"}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          {cadenceLabel(account.sendFrequency)} batch
                         </span>
                       </Td>
                       <Td>
@@ -500,15 +318,13 @@ export function ClientsPage() {
                       <Td>
                         <button
                           type="button"
-                          className="rounded-md p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                          aria-label={`Remove ${c.name}`}
                           onClick={(e) => {
                             e.stopPropagation();
-                            void actions.removeClient(c.id);
-                            toast(`${c.name} removed from the list.`);
+                            setOpenClientId(c.id);
                           }}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
                         >
-                          <Trash2 size={14} />
+                          Manage <ChevronRight size={12} />
                         </button>
                       </Td>
                     </tr>
@@ -519,193 +335,403 @@ export function ClientsPage() {
           )}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
             <p className="text-[11px] text-slate-500">
-              Click a row to edit that customer's message schedule on the right.
+              Open a customer to change their status or message types. The send cadence is set once
+              in Configuration.
             </p>
             <span className="text-[11px] text-slate-400">
               {clients.filter((c) => c.status === "active").length} active of {clients.length} total
             </span>
           </div>
         </Card>
+      ) : null}
 
-        <div className="space-y-5">
-          <Card>
-            <CardHead
-              icon={<MessageSquare size={16} />}
-              title="Message schedule"
-              subtitle={selected ? `${selected.name} · ${selected.company}` : "Select a customer"}
+      {tab === "schedule" ? (
+        <Card>
+          <CardHead
+            icon={<Send size={16} />}
+            title="Customers to mail"
+            subtitle="Queue is ordered by the next scheduled send"
+            action={
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={() => sendTo(queued.length ? queued : dueQueue.slice(0, 3).map((c) => c.id))}
+              >
+                <Send size={13} /> {queued.length ? `Send ${queued.length}` : "Send next 3"}
+              </button>
+            }
+          />
+          {dueQueue.length === 0 ? (
+            <EmptyState
+              title="Nothing queued"
+              hint="Add a customer and they will appear here with their next send date."
             />
-            {selected ? (
-              <div className="space-y-4 px-4 py-4">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-slate-600">Status</span>
-                  <Segmented
-                    size="sm"
-                    value={selected.status}
-                    onChange={(v) => updateClient(selected.id, { status: v })}
-                    options={[
-                      { value: "active", label: "Active" },
-                      { value: "paused", label: "Paused" },
-                      { value: "prospect", label: "Prospect" },
-                    ]}
-                  />
-                </div>
-
-                <div>
-                  <p className="mb-1.5 text-xs font-medium text-slate-600">Frequency of messaging</p>
-                  <Segmented
-                    size="sm"
-                    value={selected.frequency}                      onChange={(v) =>
-                        updateClient(selected.id, {
-                          frequency: v,
-                          messageTypes: selected.messageTypes,
-                          nextSendAt: nextSendFrom(v, selected.messageTypes),
-                        })
-                      }
-                    options={FREQUENCIES.map((f) => ({ value: f.value, label: f.label }))}
-                  />
-                </div>
-
-                <div>
-                  <p className="mb-1.5 text-xs font-medium text-slate-600">
-                    Type of message they receive
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {MESSAGE_TYPES.map((t) => (
-                      <CheckboxChip
-                        key={t.value}
-                        checked={selected.messageTypes.includes(t.value)}
-                        onChange={() =>
-                          updateClient(selected.id, {
-                            messageTypes: selected.messageTypes.includes(t.value)
-                              ? selected.messageTypes.filter((x) => x !== t.value)
-                              : [...selected.messageTypes, t.value],
-                          })
-                        }
-                      >
-                        {t.label}
-                      </CheckboxChip>
-                    ))}
-                  </div>
-                  <ul className="mt-3 space-y-1.5">
-                    {MESSAGE_TYPES.filter((t) => selected.messageTypes.includes(t.value)).map((t) => (
-                      <li key={t.value} className="text-[11px] text-slate-500">
-                        <span className="font-medium text-slate-700">{t.label}:</span> {t.hint}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                  Next send {shortDate(selected.nextSendAt)} · {titleCase(selected.frequency)} cadence
-                  · opens {selected.openRate}%
-                </div>
-
-                <button
-                  type="button"
-                  className={btnPrimary}
-                  onClick={() => sendTo([selected.id])}
+          ) : (
+            <ul className="grid gap-2 px-4 py-4 md:grid-cols-2">
+              {dueQueue.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-3"
                 >
-                  <Send size={14} /> Send update now
-                </button>
-              </div>
-            ) : (
-              <EmptyState title="No customer selected" />
-            )}
-          </Card>
-
-          <Card>
-            <CardHead
-              icon={<Send size={16} />}
-              title="Customers to mail"
-              subtitle="Queue is ordered by the next scheduled send"
-              action={
-                <button
-                  type="button"
-                  className={btnPrimary}
-                  onClick={() => sendTo(queued.length ? queued : dueQueue.slice(0, 3).map((c) => c.id))}
-                >
-                  <Send size={13} /> {queued.length ? `Send ${queued.length}` : "Send next 3"}
-                </button>
-              }
-            />
-            <ul className="divide-y divide-slate-100">
-              {dueQueue.slice(0, 6).map((c) => (
-                <li key={c.id} className="flex items-start gap-3 px-4 py-3">
                   <input
                     type="checkbox"
                     className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                    aria-label={`Queue ${c.name}`}
                     checked={queued.includes(c.id)}
                     onChange={() => toggleQueued(c.id)}
                   />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-900">
-                      {c.name} <span className="text-[11px] font-normal text-slate-500">{c.email}</span>
+                      {c.name}{" "}
+                      <span className="text-[11px] font-normal text-slate-500">{c.email}</span>
                     </p>
                     <p className="truncate text-[11px] text-slate-600">
                       {subjectFor(c, c.messageTypes)}
                     </p>
                     <p className="mt-0.5 text-[11px] text-slate-400">
-                      {cadenceLabel(c.frequency)} · due {shortDate(c.nextSendAt)}
+                      {cadenceLabel(account.sendFrequency)} · due {shortDate(c.nextSendAt)}
                     </p>
                   </div>
                 </li>
               ))}
             </ul>
-          </Card>
-        </div>
-      </div>
+          )}
+        </Card>
+      ) : null}
 
-      <Card>
-        <CardHead
-          icon={<Mail size={16} />}
-          title="Recent email activity"
-          subtitle={`Sent from ${account.loginEmail} · ${sent.length} messages logged`}
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px]">
-            <thead className="bg-slate-50">
-              <tr>
-                <Th>Customer</Th>
-                <Th>Subject</Th>
-                <Th>Message types</Th>
-                <Th>Sent</Th>
-                <Th>Status</Th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {sent.slice(0, 10).map((m) => (
-                <tr key={m.id} className="hover:bg-slate-50/70">
-                  <Td className="font-medium text-slate-900">{m.clientName}</Td>
-                  <Td className="text-xs text-slate-600">{m.subject}</Td>
-                  <Td>
-                    <span className="flex flex-wrap gap-1">
-                      {m.types.map((t) => (
-                        <Badge key={t}>{titleCase(t)}</Badge>
-                      ))}
-                    </span>
-                  </Td>
-                  <Td className="text-xs text-slate-500">{relativeTime(m.sentAt)}</Td>
-                  <Td>
-                    <Badge
-                      tone={
-                        m.status === "clicked"
-                          ? "good"
-                          : m.status === "opened"
-                            ? "info"
-                            : m.status === "bounced"
-                              ? "bad"
-                              : "neutral"
-                      }
-                    >
-                      {m.status}
-                    </Badge>
-                  </Td>
-                </tr>
+      {tab === "activity" ? (
+        <Card>
+          <CardHead
+            icon={<Mail size={16} />}
+            title="Recent email activity"
+            subtitle={`Sent from ${account.loginEmail} · ${sent.length} messages logged`}
+          />
+          {sent.length === 0 ? (
+            <EmptyState
+              title="Nothing sent yet"
+              hint="Emails you queue from the send queue are logged here."
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[680px]">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <Th>Customer</Th>
+                    <Th>Subject</Th>
+                    <Th>Message types</Th>
+                    <Th>Sent</Th>
+                    <Th>Status</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {sent.slice(0, 25).map((m) => (
+                    <tr key={m.id} className="hover:bg-slate-50/70">
+                      <Td className="font-medium text-slate-900">{m.clientName}</Td>
+                      <Td className="text-xs text-slate-600">{m.subject}</Td>
+                      <Td>
+                        <span className="flex flex-wrap gap-1">
+                          {m.types.map((t) => (
+                            <Badge key={t}>{titleCase(t)}</Badge>
+                          ))}
+                        </span>
+                      </Td>
+                      <Td className="text-xs text-slate-500">{relativeTime(m.sentAt)}</Td>
+                      <Td>
+                        <Badge
+                          tone={
+                            m.status === "clicked"
+                              ? "good"
+                              : m.status === "opened"
+                                ? "info"
+                                : m.status === "bounced"
+                                  ? "bad"
+                                  : "neutral"
+                          }
+                        >
+                          {m.status}
+                        </Badge>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      ) : null}
+
+      {/* ---- Add customer -------------------------------------------------- */}
+      <Modal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        title="Add a current active customer"
+        subtitle="New customers start receiving alerts from their first scheduled send"
+        icon={<UserPlus size={16} />}
+        width="lg"
+        footer={
+          <>
+            <button type="button" className={btnGhost} onClick={() => setAddOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className={btnPrimary} onClick={addClient}>
+              <Plus size={14} /> Add customer
+            </button>
+          </>
+        }
+      >
+        <div className="grid gap-3 px-4 py-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label="Customer name">
+            <input
+              className={inputClass}
+              placeholder="e.g. Amina Yusuf"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </Field>
+          <Field label="Customer email">
+            <input
+              className={inputClass}
+              placeholder="name@theirstore.com"
+              value={form.email}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
+          </Field>
+          <Field label="Company / store">
+            <input
+              className={inputClass}
+              placeholder="e.g. Glow House Store"
+              value={form.company}
+              onChange={(e) => setForm({ ...form, company: e.target.value })}
+            />
+          </Field>
+          <Field label="Industry">
+            <select
+              className={inputClass}
+              value={form.industry}
+              onChange={(e) => setForm({ ...form, industry: e.target.value })}
+            >
+              {[
+                "Beauty & cosmetics",
+                "Fashion",
+                "Phones & electronics",
+                "Home appliances",
+                "Auto parts",
+              ].map((i) => (
+                <option key={i}>{i}</option>
               ))}
-            </tbody>
-          </table>
+            </select>
+          </Field>
+          <Field label="Plan">
+            <select
+              className={inputClass}
+              value={form.tier}
+              onChange={(e) => setForm({ ...form, tier: e.target.value as Client["tier"] })}
+            >
+              <option value="starter">Starter — {money(TIER_FEE.starter)}/mo</option>
+              <option value="growth">Growth — {money(TIER_FEE.growth)}/mo</option>
+              <option value="premium">Premium — {money(TIER_FEE.premium)}/mo</option>
+            </select>
+          </Field>
+          <div className="sm:col-span-2 lg:col-span-3">
+            <p className="mb-1.5 text-xs font-medium text-slate-600">
+              What should this customer receive?
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {MESSAGE_TYPES.map((t) => (
+                <CheckboxChip
+                  key={t.value}
+                  checked={form.messageTypes.includes(t.value)}
+                  onChange={() => toggleFormMessageType(t.value)}
+                >
+                  {t.label}
+                </CheckboxChip>
+              ))}
+            </div>
+          </div>
         </div>
-      </Card>
+      </Modal>
+
+      {/* ---- Email account ------------------------------------------------- */}
+      <Modal
+        open={accountOpen}
+        onClose={() => setAccountOpen(false)}
+        title="Configuration"
+        subtitle="Sending cadence and the mailbox used to send alerts and receive replies"
+        icon={<Settings2 size={16} />}
+        footer={
+          <>
+            <button type="button" className={btnGhost} onClick={() => setAccountOpen(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={btnPrimary}
+              onClick={() => {
+                void actions.saveMailAccount(account);
+                toast("Configuration saved — everyone now sends on the same cadence.");
+                setAccountOpen(false);
+              }}
+            >
+              Save configuration
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3 px-4 py-4">
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-slate-600">Send cadence</p>
+            <Segmented
+              size="sm"
+              value={account.sendFrequency}
+              onChange={(v) => setAccount({ ...account, sendFrequency: v })}
+              options={FREQUENCIES.map((f) => ({ value: f.value, label: f.label }))}
+            />
+            <p className="mt-1.5 text-[11px] text-slate-500">
+              Everyone on your list is mailed on the same schedule. Saving applies it to all{" "}
+              {clients.length} customer{clients.length === 1 ? "" : "s"}.
+            </p>
+          </div>
+          <Field label="Sender name">
+            <input
+              className={inputClass}
+              value={account.senderName}
+              onChange={(e) => setAccount({ ...account, senderName: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="Login email (alerts are sent from here)"
+            hint="Also the address customers reply to by default"
+          >
+            <input
+              className={inputClass}
+              value={account.loginEmail}
+              onChange={(e) => setAccount({ ...account, loginEmail: e.target.value })}
+            />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Reply-to address">
+              <input
+                className={inputClass}
+                value={account.replyTo}
+                onChange={(e) => setAccount({ ...account, replyTo: e.target.value })}
+              />
+            </Field>
+            <Field label="Second email (owner copies)">
+              <input
+                className={inputClass}
+                value={account.secondaryEmail}
+                onChange={(e) => setAccount({ ...account, secondaryEmail: e.target.value })}
+              />
+            </Field>
+          </div>
+          <Field label="Timezone">
+            <input
+              className={inputClass}
+              value={account.timezone}
+              onChange={(e) => setAccount({ ...account, timezone: e.target.value })}
+            />
+          </Field>
+          <Field label="Email signature">
+            <textarea
+              className={`${inputClass} h-20 resize-none`}
+              value={account.signature}
+              onChange={(e) => setAccount({ ...account, signature: e.target.value })}
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-slate-300"
+              checked={account.dailyDigest}
+              onChange={(e) => setAccount({ ...account, dailyDigest: e.target.checked })}
+            />
+            Send me a daily digest of everything that was sent
+          </label>
+        </div>
+      </Modal>
+
+      {/* ---- One customer's schedule --------------------------------------- */}
+      <Modal
+        open={openClient !== null}
+        onClose={() => setOpenClientId(null)}
+        title={openClient?.name ?? "Customer"}
+        subtitle={openClient ? `${openClient.company} · ${openClient.email}` : undefined}
+        icon={<MessageSquare size={16} />}
+        footer={
+          openClient ? (
+            <>
+              <button
+                type="button"
+                className={btnGhost}
+                onClick={() => {
+                  void actions.removeClient(openClient.id);
+                  toast(`${openClient.name} removed from the list.`);
+                  setOpenClientId(null);
+                }}
+              >
+                <Trash2 size={14} /> Remove
+              </button>
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={() => sendTo([openClient.id])}
+              >
+                <Send size={14} /> Send update now
+              </button>
+            </>
+          ) : null
+        }
+      >
+        {openClient ? (
+          <div className="space-y-4 px-4 py-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-slate-600">Status</span>
+              <Segmented
+                size="sm"
+                value={openClient.status}
+                onChange={(v) => updateClient(openClient.id, { status: v })}
+                options={[
+                  { value: "active", label: "Active" },
+                  { value: "paused", label: "Paused" },
+                  { value: "prospect", label: "Prospect" },
+                ]}
+              />
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs font-medium text-slate-600">
+                Type of message they receive
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {MESSAGE_TYPES.map((t) => (
+                  <CheckboxChip
+                    key={t.value}
+                    checked={openClient.messageTypes.includes(t.value)}
+                    onChange={() =>
+                      updateClient(openClient.id, {
+                        messageTypes: openClient.messageTypes.includes(t.value)
+                          ? openClient.messageTypes.filter((x) => x !== t.value)
+                          : [...openClient.messageTypes, t.value],
+                      })
+                    }
+                  >
+                    {t.label}
+                  </CheckboxChip>
+                ))}
+              </div>
+            </div>
+
+            <dl className="grid gap-2 sm:grid-cols-2">
+              <Detail label="Plan">{titleCase(openClient.tier)}</Detail>
+              <Detail label="Monthly fee">{money(openClient.monthlyFee)}</Detail>
+              <Detail label="Next send">{shortDate(openClient.nextSendAt)}</Detail>
+              <Detail label="Open rate">{openClient.openRate}%</Detail>
+              <Detail label="Last contacted">{relativeTime(openClient.lastContacted)}</Detail>
+              <Detail label="Industry">{openClient.industry}</Detail>
+            </dl>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }
