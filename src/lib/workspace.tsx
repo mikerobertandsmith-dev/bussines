@@ -8,14 +8,19 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { useAuth, useUser } from "@clerk/clerk-react";
+import { Matrix, loader } from "@/components/ui/matrix";
 import { authEnabled, dbEnabled } from "./env";
 import { sampleProfile, sampleWorkspace } from "../data/sample";
 import {
   addBuyListItem,
   createClientRow,
+  createInventoryItem,
+  createPromotionBrief,
   createWorkspaceFromOnboarding,
   deleteBrandLogo,
   deleteClientRow,
+  deleteInventoryItem,
+  deletePromotionBrief,
   fetchBusiness,
   loadWorkspace,
   logSentMessages,
@@ -27,7 +32,10 @@ import {
   setSupplierCadence,
   updateBrandLogo,
   updateClientRow,
+  updateInventoryItem,
+  updatePromotionBrief,
   uploadBrandLogo,
+  uploadInventoryImage as uploadInventoryImageFile,
 } from "./repo";
 import { setAccessTokenProvider } from "./supabase";
 import { nextSendFrom } from "./schedule";
@@ -35,9 +43,14 @@ import type {
   BusinessProfile,
   Cadence,
   Client,
+  DiscountKind,
+  InventoryItem,
   MailAccount,
   MessageType,
   OnboardingInput,
+  PromotionBriefStatus,
+  PromotionComponent,
+  PromotionTemplate,
   SendFrequency,
   WorkspaceData,
 } from "./types";
@@ -64,6 +77,35 @@ export interface WorkspaceActions {
   runReviewScan: () => Promise<void>;
   uploadLogo: (file: File) => Promise<void>;
   removeLogo: () => Promise<void>;
+  /** Creates when `id` is omitted, updates otherwise. */
+  saveInventoryItem: (input: InventoryItemInput & { id?: string }) => Promise<void>;
+  removeInventoryItem: (itemId: string) => Promise<void>;
+  /** Uploads an item image and resolves to its URL (data URL in demo mode). */
+  uploadInventoryImage: (file: File) => Promise<string>;
+  savePromotionBrief: (input: PromotionBriefInput & { id?: string }) => Promise<void>;
+  removePromotionBrief: (briefId: string) => Promise<void>;
+}
+
+/** Everything the inventory form collects, minus the server-owned fields. */
+export type InventoryItemInput = Omit<InventoryItem, "id" | "createdAt">;
+
+/** Everything the ad-brief form collects, minus the server-owned fields. */
+export interface PromotionBriefInput {
+  name: string;
+  itemId: string | null;
+  serviceId: string | null;
+  priceItemId: string | null;
+  contactInfo: string;
+  template: PromotionTemplate;
+  accentColor: string;
+  components: PromotionComponent[];
+  discountKind: DiscountKind;
+  discountValue: number;
+  dealText: string;
+  couponCode: string;
+  headline: string;
+  notes: string;
+  status: PromotionBriefStatus;
 }
 
 /** Reads a picked image as a data URL — used when no storage bucket is configured. */
@@ -265,6 +307,57 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
       },
       async removeLogo() {
         patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl: "" } }));
+      },
+      async saveInventoryItem(input) {
+        const { id, ...fields } = input;
+        patchData((current) => ({
+          ...current,
+          inventory: id
+            ? current.inventory.map((item) => (item.id === id ? { ...item, ...fields } : item))
+            : [
+                { ...fields, id: `inv-${Date.now()}`, createdAt: new Date().toISOString() },
+                ...current.inventory,
+              ],
+        }));
+      },
+      async removeInventoryItem(itemId) {
+        patchData((current) => ({
+          ...current,
+          inventory: current.inventory.filter((item) => item.id !== itemId),
+          promotionBriefs: current.promotionBriefs.map((p) =>
+            p.itemId === itemId || p.serviceId === itemId || p.priceItemId === itemId
+              ? {
+                  ...p,
+                  itemId: p.itemId === itemId ? null : p.itemId,
+                  serviceId: p.serviceId === itemId ? null : p.serviceId,
+                  priceItemId: p.priceItemId === itemId ? null : p.priceItemId,
+                }
+              : p,
+          ),
+        }));
+      },
+      async uploadInventoryImage(file) {
+        return fileToDataUrl(file);
+      },
+      async savePromotionBrief(input) {
+        const { id, ...fields } = input;
+        const now = new Date().toISOString();
+        patchData((current) => ({
+          ...current,
+          promotionBriefs: id
+            ? current.promotionBriefs.map((p) =>
+                p.id === id ? { ...p, ...fields, updatedAt: now } : p,
+              )
+            : [{ ...fields, id: `brief-${Date.now()}`, submittedAt: now, updatedAt: now },
+                ...current.promotionBriefs],
+        }));
+      },
+      async removePromotionBrief(briefId) {
+        patchData((current) => ({
+          ...current,
+          promotionBriefs: current.promotionBriefs.filter((p) => p.id !== briefId),
+          deliveredAds: current.deliveredAds.filter((a) => a.briefId !== briefId),
+        }));
       },
     }),
     [patchData],
@@ -565,6 +658,97 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         patchData((current) => ({ ...current, profile: { ...current.profile, logoUrl: "" } }));
         if (dbEnabled && userId) await deleteBrandLogo(userId);
       },
+      async saveInventoryItem(input) {
+        const { id, ...fields } = input;
+        if (!dbEnabled) {
+          patchData((current) => ({
+            ...current,
+            inventory: id
+              ? current.inventory.map((item) => (item.id === id ? { ...item, ...fields } : item))
+              : [
+                  { ...fields, id: `inv-${Date.now()}`, createdAt: new Date().toISOString() },
+                  ...current.inventory,
+                ],
+          }));
+          return;
+        }
+        await withBusiness(async (business) => {
+          if (id) {
+            await updateInventoryItem(id, fields);
+            patchData((current) => ({
+              ...current,
+              inventory: current.inventory.map((item) =>
+                item.id === id ? { ...item, ...fields } : item,
+              ),
+            }));
+          } else {
+            const created = await createInventoryItem(business.id, fields);
+            patchData((current) => ({ ...current, inventory: [created, ...current.inventory] }));
+          }
+        });
+      },
+      async removeInventoryItem(itemId) {
+        patchData((current) => ({
+          ...current,
+          inventory: current.inventory.filter((item) => item.id !== itemId),
+          promotionBriefs: current.promotionBriefs.map((p) =>
+            p.itemId === itemId || p.serviceId === itemId || p.priceItemId === itemId
+              ? {
+                  ...p,
+                  itemId: p.itemId === itemId ? null : p.itemId,
+                  serviceId: p.serviceId === itemId ? null : p.serviceId,
+                  priceItemId: p.priceItemId === itemId ? null : p.priceItemId,
+                }
+              : p,
+          ),
+        }));
+        if (dbEnabled) await withBusiness(() => deleteInventoryItem(itemId));
+      },
+      async uploadInventoryImage(file) {
+        if (!userId) throw new Error("You need to be signed in to upload an image.");
+        return uploadInventoryImageFile(userId, file);
+      },
+      async savePromotionBrief(input) {
+        const { id, ...fields } = input;
+        const now = new Date().toISOString();
+        if (!dbEnabled) {
+          patchData((current) => ({
+            ...current,
+            promotionBriefs: id
+              ? current.promotionBriefs.map((p) =>
+                  p.id === id ? { ...p, ...fields, updatedAt: now } : p,
+                )
+              : [{ ...fields, id: `brief-${Date.now()}`, submittedAt: now, updatedAt: now },
+                  ...current.promotionBriefs],
+          }));
+          return;
+        }
+        await withBusiness(async (business) => {
+          if (id) {
+            await updatePromotionBrief(id, fields);
+            patchData((current) => ({
+              ...current,
+              promotionBriefs: current.promotionBriefs.map((p) =>
+                p.id === id ? { ...p, ...fields, updatedAt: now } : p,
+              ),
+            }));
+          } else {
+            const created = await createPromotionBrief(business.id, fields);
+            patchData((current) => ({
+              ...current,
+              promotionBriefs: [created, ...current.promotionBriefs],
+            }));
+          }
+        });
+      },
+      async removePromotionBrief(briefId) {
+        patchData((current) => ({
+          ...current,
+          promotionBriefs: current.promotionBriefs.filter((p) => p.id !== briefId),
+          deliveredAds: current.deliveredAds.filter((a) => a.briefId !== briefId),
+        }));
+        if (dbEnabled) await withBusiness(() => deletePromotionBrief(briefId));
+      },
     }),
     [data, patchData, withBusiness, userId],
   );
@@ -604,11 +788,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
 export function WorkspaceLoading({ label = "Loading your workspace…" }: { label?: string }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
-      <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-        <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-        <span className="text-sm text-slate-600">{label}</span>
-      </div>
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
+      <Matrix
+        rows={7}
+        cols={7}
+        frames={loader}
+        size={9}
+        gap={3}
+        fps={16}
+        ariaLabel={label}
+        className="text-primary"
+      />
+      <span className="text-sm text-muted-foreground">{label}</span>
     </div>
   );
 }

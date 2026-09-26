@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Bell, BellRing, ChevronRight, Eye } from "lucide-react";
-import { Badge, Card, CardHead, EmptyState, Segmented, Stat } from "../components/ui";
+import { Badge, Card, CardHead, EmptyState, Segmented, Stat } from "../components/primitives";
 import { buildAlerts } from "../lib/alerts";
 import type { RouteId } from "../lib/hooks";
 import { useWorkspaceData } from "../lib/workspace";
@@ -18,6 +18,9 @@ const PAGE_LABEL: Record<RouteId, string> = {
   competition: "Competition",
   clients: "Clients",
   business: "My business",
+  social: "Social & reviews",
+  inventory: "Inventory & services",
+  promotion: "Promotions",
   notifications: "Notifications",
 };
 

@@ -31,6 +31,9 @@ export type RouteId =
   | "competition"
   | "clients"
   | "business"
+  | "social"
+  | "inventory"
+  | "promotion"
   | "notifications";
 
 const ROUTES: RouteId[] = [
@@ -38,6 +41,9 @@ const ROUTES: RouteId[] = [
   "competition",
   "clients",
   "business",
+  "social",
+  "inventory",
+  "promotion",
   "notifications",
 ];
 

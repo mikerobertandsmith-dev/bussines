@@ -1,13 +1,17 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { ClerkProvider } from "@clerk/clerk-react";
+import { ThemeProvider } from "next-themes";
 import { App } from "./App";
 import { authEnabled, env } from "./lib/env";
 import "./index.css";
 
 const app = (
   <StrictMode>
-    <App />
+    {/* Drives the `.dark` class on <html> for the marketing theme toggle. */}
+    <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+      <App />
+    </ThemeProvider>
   </StrictMode>
 );
 

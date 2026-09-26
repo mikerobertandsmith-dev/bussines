@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Image as ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
-import { Logo, btnGhost, btnPrimary } from "./ui";
+import { Logo, btnGhost, btnPrimary } from "./primitives";
 
 const MAX_MB = 2;
 

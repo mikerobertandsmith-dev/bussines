@@ -4,13 +4,14 @@ import { UserButton, useClerk } from "@clerk/clerk-react";
 import {
   Bell,
   Binoculars,
+  Boxes,
   Building2,
   ChevronDown,
-  Database,
   Mail,
   LogOut,
+  Megaphone,
   Menu,
-  RefreshCw,
+  Share2,
   ShieldCheck,
   Truck,
   X,
@@ -22,7 +23,7 @@ import { useWorkspace } from "../lib/workspace";
 import { daysAgo } from "../lib/format";
 import { LogoUpload } from "./LogoUpload";
 import { Modal } from "./Modal";
-import { Badge, Logo, btnPrimary } from "./ui";
+import { Badge, Logo, btnPrimary } from "./primitives";
 
 type NavItem = { id: RouteId; label: string; hint: string; icon: ReactNode };
 
@@ -43,6 +44,12 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         hint: "Traffic, SEO, ads & reviews",
         icon: <Binoculars size={17} />,
       },
+      {
+        id: "social",
+        label: "Social & reviews",
+        hint: "Your reviews, social and competitor benchmarks",
+        icon: <Share2 size={17} />,
+      },
     ],
   },
   {
@@ -57,8 +64,25 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       {
         id: "business",
         label: "My Business",
-        hint: "SEO, GEO, reviews & ad assets",
+        hint: "SEO, GEO & ad assets",
         icon: <Building2 size={17} />,
+      },
+    ],
+  },
+  {
+    label: "Create",
+    items: [
+      {
+        id: "inventory",
+        label: "Inventory & services",
+        hint: "What you sell — the source for your ads",
+        icon: <Boxes size={17} />,
+      },
+      {
+        id: "promotion",
+        label: "Promotions",
+        hint: "Tell us what your next ad should include",
+        icon: <Megaphone size={17} />,
       },
     ],
   },
@@ -68,15 +92,19 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
  * Explicit sign-out control. Only mounted when Clerk is configured, so the
  * hook is never called without a ClerkProvider above it.
  */
-function LogoutButton() {
+function LogoutButton({ collapsed }: { collapsed: boolean }) {
   const { signOut } = useClerk();
   return (
     <button
       type="button"
       onClick={() => void signOut()}
-      className="mt-1 flex w-full items-center gap-1.5 rounded-lg px-2 py-2 text-[11px] font-medium text-slate-400 transition hover:bg-slate-800 hover:text-white"
+      title="Log out"
+      className={`mt-1 flex w-full items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] font-semibold text-rose-300 transition hover:border-rose-500 hover:bg-rose-600 hover:text-white ${
+        collapsed ? "lg:justify-center" : ""
+      }`}
     >
-      <LogOut size={12} /> Log out
+      <LogOut size={13} />
+      <span className={collapsed ? "lg:hidden" : ""}>Log out</span>
     </button>
   );
 }
@@ -96,7 +124,19 @@ export const PAGE_META: Record<RouteId, { title: string; subtitle: string }> = {
   },
   business: {
     title: "My business",
-    subtitle: "Your SEO & GEO scores, traffic, reviews, ad assets and stock to buy next",
+    subtitle: "Your SEO & GEO scores, traffic, ad assets and stock to buy next",
+  },
+  social: {
+    title: "Social & reviews",
+    subtitle: "Your tracked reviews and social channels, plus how competitors compare",
+  },
+  inventory: {
+    title: "Inventory & services",
+    subtitle: "What you sell — the products and services your ad designs are built from",
+  },
+  promotion: {
+    title: "Promotions",
+    subtitle: "Brief our design team on your next ad, then collect the finished design",
   },
   notifications: {
     title: "Notifications",
@@ -114,7 +154,7 @@ export function Layout({
   children: ReactNode;
 }) {
   const [navOpen, setNavOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { data, actions } = useWorkspace();
 
@@ -129,6 +169,9 @@ export function Layout({
       : 0,
     clients: data ? data.clients.filter((c) => c.status === "active").length : 0,
     business: alerts.filter((a) => a.page === "business").length,
+    social: data ? data.latestReviewScan.flagged : 0,
+    inventory: data ? data.inventory.filter((i) => i.status === "active").length : 0,
+    promotion: data ? data.promotionBriefs.length : 0,
     notifications: alerts.length,
   };
 
@@ -145,17 +188,23 @@ export function Layout({
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="flex min-h-screen">
         <aside
-          className={`fixed inset-y-0 left-0 z-40 flex w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900 text-slate-300 transition-transform lg:static lg:translate-x-0 ${
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          className={`fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col overflow-hidden border-r border-slate-800 bg-slate-900 text-slate-300 transition-all duration-200 lg:sticky lg:top-0 lg:bottom-auto lg:h-screen lg:translate-x-0 ${
             navOpen ? "translate-x-0" : "-translate-x-full"
-          }`}
+          } ${hovered ? "w-64" : "w-64 lg:w-[76px]"}`}
         >
           {/* Brand block — plain, as it was before the profile moved to the top bar. */}
-          <div className="flex items-center justify-between px-2 pt-4">
+          <div
+            className={`flex items-center justify-between px-2 pt-4 ${
+              hovered ? "" : "lg:justify-center"
+            }`}
+          >
             <div className="flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500 text-white">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white">
                 <ShieldCheck size={18} />
               </span>
-              <div className="min-w-0">
+              <div className={`min-w-0 ${hovered ? "" : "lg:hidden"}`}>
                 <p className="truncate text-sm font-semibold text-white">{brand}</p>
                 <p className="text-[11px] text-slate-400">Market Watch desk</p>
               </div>
@@ -173,7 +222,11 @@ export function Layout({
           <nav className="mt-4 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
             {NAV_GROUPS.map((group) => (
               <div key={group.label}>
-                <p className="px-3 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase">
+                <p
+                  className={`px-3 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase ${
+                    hovered ? "" : "lg:hidden"
+                  }`}
+                >
                   {group.label}
                 </p>
                 <div className="space-y-1">
@@ -187,6 +240,8 @@ export function Layout({
                         aria-current={active ? "page" : undefined}
                         onClick={() => openItem(item.id)}
                         className={`group relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition ${
+                          hovered ? "" : "lg:justify-center"
+                        } ${
                           active
                             ? "bg-indigo-600 text-white shadow-sm"
                             : "text-slate-300 hover:bg-slate-800 hover:text-white"
@@ -201,12 +256,18 @@ export function Layout({
                         >
                           {item.icon}
                         </span>
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                        <span
+                          className={`min-w-0 flex-1 truncate text-sm font-medium ${
+                            hovered ? "" : "lg:hidden"
+                          }`}
+                        >
                           {item.label}
                         </span>
                         {badges[item.id] > 0 ? (
                           <span
                             className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                              hovered ? "" : "lg:hidden"
+                            } ${
                               active ? "bg-white/25 text-white" : "bg-slate-800 text-slate-300"
                             }`}
                           >
@@ -221,64 +282,9 @@ export function Layout({
             ))}
           </nav>
 
-          {/* Secondary workspace facts stay folded away until asked for. */}
+          {/* Sign-out sits at the bottom of the rail. */}
           <div className="mt-auto border-t border-slate-800 px-3 py-3">
-            <button
-              type="button"
-              onClick={() => setInfoOpen((v) => !v)}
-              className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-[11px] font-medium text-slate-400 transition hover:bg-slate-800 hover:text-white"
-            >
-              <span className="flex items-center gap-1.5">
-                <RefreshCw size={12} /> Monitoring cadence &amp; data
-              </span>
-              <ChevronDown
-                size={12}
-                className={`transition ${infoOpen ? "rotate-180" : ""}`}
-              />
-            </button>
-
-            {infoOpen ? (
-              <div className="mt-1 space-y-2 rounded-xl border border-slate-800 bg-slate-800/40 p-3 text-[11px] text-slate-400">
-                <ul className="space-y-1.5">
-                  {[
-                    {
-                      label: "Supplier feeds",
-                      value: data?.suppliers.some((s) => s.cadence === "daily")
-                        ? "Daily"
-                        : "Set per source",
-                    },
-                    {
-                      label: "Competitor scans",
-                      value: data?.competitors.some((c) => c.cadence === "daily")
-                        ? "Daily"
-                        : "Set per source",
-                    },
-                    {
-                      label: "Client check-ins",
-                      value: data?.clients.length ? `${data.clients.length} scheduled` : "None yet",
-                    },
-                    { label: "Review scans", value: "Weekly" },
-                  ].map((row) => (
-                    <li key={row.label} className="flex items-center justify-between gap-2">
-                      <span>{row.label}</span>
-                      <span className="text-slate-200">{row.value}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="flex items-start gap-1.5 border-t border-slate-700/60 pt-2">
-                  <Database size={12} className="mt-0.5 shrink-0" />
-                  <span>
-                    {demoMode
-                      ? "Demo mode — add Clerk and Supabase keys to store your own data."
-                      : dbEnabled
-                        ? "Live — reading and writing your Supabase workspace."
-                        : "Auth connected, database not configured yet."}
-                  </span>
-                </p>
-              </div>
-            ) : null}
-
-            {authEnabled ? <LogoutButton /> : null}
+            {authEnabled ? <LogoutButton collapsed={!hovered} /> : null}
           </div>
         </aside>
 
@@ -314,9 +320,7 @@ export function Layout({
               <div className="flex items-center gap-2">
                 {demoMode ? (
                   <Badge tone="warn">Demo data</Badge>
-                ) : dbEnabled ? (
-                  <Badge tone="good">Live workspace</Badge>
-                ) : (
+                ) : dbEnabled ? null : (
                   <Badge tone="info">Sample data</Badge>
                 )}
                 <button

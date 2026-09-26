@@ -118,10 +118,10 @@ scan. Until that scan lands, the pages say a baseline is pending rather than sho
 
 ---
 
-## 6. The four pages
+## 6. The workspace pages
 
 Navigation is a hash route you can bookmark: `#/suppliers`, `#/competition`, `#/clients`,
-`#/business`.
+`#/business`, `#/inventory` and `#/promotion`.
 
 **Suppliers** — latest inventory from each supplier site and what changed (new product, price move,
 stock move, promotion), buy price before/after, stock transitions, MOQ, lead time, a suggested action
@@ -140,8 +140,19 @@ customers-to-mail queue that logs sends and reschedules, and the recent email ac
 
 **My Business** — SEO and GEO scores, traffic and channels, top SEO keywords and top GEO prompts for
 the week, downloadable weekly SEO/GEO report, 2-month review analysis per source plus the latest
-review scan with suggested replies, photo shoot and Figma ad packs per product, social scores with
-focus priorities, and inventory to buy next driven by competitor traffic and keyword gaps.
+review scan with suggested replies, social scores with focus priorities, and inventory to buy next
+driven by competitor traffic and keyword gaps.
+
+**Inventory & services** — the catalogue your ads are built from: products (with stock) and services,
+each with its own image.
+
+**Promotions** — this page is a design brief, not a design tool. You pick the components your ad
+should include (product, price, discount, deal, coupon, logo, contact, rating), fill in their values
+— a discount can be a percentage or a money amount — plus the headline, format, accent colour and any
+notes. Sending the brief writes it to Supabase for the design team. The **Ad frame** shows an "in
+design" placeholder until we finish, then the delivered design we pushed to the `delivered-ads`
+bucket appears there to export. **Ads history** is a single timeline of every brief sent and every
+design delivered.
 
 ---
 
@@ -153,13 +164,17 @@ focus priorities, and inventory to buy next driven by competitor traffic and key
 | Suppliers | `suppliers`, `supplier_items` |
 | Competitors | `competitors`, `competitor_metrics`, `competitor_social`, `competitor_keywords`, `competitor_ads`, `competitor_reviews`, `competitor_audience`, `competitor_items` |
 | Clients | `clients`, `mail_accounts`, `sent_messages` |
-| My business | `my_keywords`, `my_metrics`, `my_review_sources`, `my_review_series`, `my_reviews`, `ad_assets`, `social_scores`, `inventory_recommendations`, `buy_list_items`, `weekly_reports` |
+| My business | `my_keywords`, `my_metrics`, `my_review_sources`, `my_review_series`, `my_reviews`, `social_scores`, `inventory_recommendations`, `buy_list_items`, `weekly_reports` |
+| Catalogue | `inventory_items` (products & services, images in the `inventory-images` bucket) |
+| Promotions | `promotion_briefs` (what the business asks for), `delivered_ads` (finished designs in the `delivered-ads` bucket) |
 | Operations | `scan_runs` (every scan queue, manual or scheduled) |
 
 Key files:
 
 ```
 supabase/migrations/0001_init.sql   schema, RLS, storage bucket
+supabase/migrations/0005_inventory_and_promotions.sql  catalogue + superseded promotion designs
+supabase/migrations/0006_promotion_briefs_and_delivered_ads.sql  ad briefs + delivered designs
 src/lib/supabase.ts                 Supabase client using Clerk session tokens
 src/lib/repo.ts                     all reads/writes + row mapping
 src/lib/workspace.tsx               data provider (live Supabase or sample mode)

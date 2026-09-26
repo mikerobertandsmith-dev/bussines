@@ -2,6 +2,7 @@ import { adAssets, geoVisibility, inventoryRecommendations, latestReviewScan, my
 import { clients, mailAccount, sentMessages } from "./clients";
 import { competitors } from "./competitors";
 import { suppliers, supplierItems } from "./suppliers";
+import { deliveredAds, inventoryItems, promotionBriefs } from "./commerce";
 import { daysAhead } from "../lib/format";
 import type { BusinessMetrics, BusinessProfile, TrafficPoint, WorkspaceData } from "../lib/types";
 
@@ -106,6 +107,9 @@ export function sampleWorkspace(profile: BusinessProfile = sampleProfile): Works
     adAssets,
     socialScores,
     inventoryRecommendations,
+    inventory: inventoryItems,
+    promotionBriefs,
+    deliveredAds,
     buyList: [],
     scanRuns: [],
     isSample: true,

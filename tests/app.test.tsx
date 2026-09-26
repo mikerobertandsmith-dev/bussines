@@ -127,21 +127,16 @@ describe("Market Watch app", () => {
     expect(container.querySelector("nav")).not.toBeNull();
   });
 
-  it("shows scores, rankings and ad assets on the my business page", async () => {
+  it("shows scores and rankings on the my business page", async () => {
     await render();
     click(findByText("button", "My Business"));
     expect(text()).toContain("My business");
     expect(text()).toContain("SEO score");
+    expect(text()).not.toContain("Download pack");
 
     click(findByText("button", "SEO & GEO"));
     expect(text()).toContain("Top ranking SEO keywords this week");
     expect(text()).toContain("Top ranking GEO prompts this week");
-
-    click(findByText("button", "Reviews"));
-    expect(text()).toContain("Review page analysis");
-
-    click(findByText("button", "Ad assets"));
-    expect(text()).toContain("Download pack");
 
     click(findByText("button", "Buy list"));
     expect(text()).toContain("Inventory you should get next");
@@ -155,8 +150,8 @@ describe("Market Watch app", () => {
     const content = text();
     expect(content).toContain("Market Watch");
     expect(content).toContain("Start free");
-    expect(content).toContain("Supplier feeds");
-    expect(content).toContain("How it works");
+    expect(content).toContain("Watching for you");
+    expect(content).toContain("Before you sign up.");
 
     // Screen gallery renders the workspace layouts with sample data.
     expect(content).toContain("Every screen, before you sign up.");
@@ -186,6 +181,39 @@ describe("Market Watch app", () => {
     expect(content).toContain("All notifications");
   });
 
+  it("shows reviews and social on the dedicated social page", async () => {
+    await render();
+    click(findByText("button", "Social & reviews"));
+    expect(text()).toContain("Review page analysis");
+    expect(text()).toContain("Latest review scan");
+
+    click(findByText("button", "Competitor reviews"));
+    expect(text()).toContain("Competitor review brief");
+
+    click(findByText("button", "Social media"));
+    expect(text()).toContain("Social media score & where to focus");
+  });
+
+  it("lists the catalogue on the inventory page", async () => {
+    await render();
+    click(findByText("button", "Inventory & services"));
+    expect(text()).toContain("Products & services");
+    expect(text()).toContain("Velvet Matte Lip Kit");
+  });
+
+  it("builds an ad brief on the promotions page and keeps a history", async () => {
+    await render();
+    click(findByText("button", "Promotions"));
+    const content = text();
+    expect(content).toContain("Ad components");
+    expect(content).toContain("Ad frame");
+    expect(content).toContain("Ads history");
+    expect(content).toContain("Discount type");
+    expect(content).toContain("Update brief");
+    expect(content).toContain("Lip kit — weekend sale");
+    expect(content).toContain("In design");
+  });
+
   it("opens the business profile dialog with the logo uploader", async () => {
     await render();
     click(container.querySelector('button[aria-label="Business profile"]'));
@@ -193,4 +221,5 @@ describe("Market Watch app", () => {
     expect(dialog.textContent ?? "").toContain("Business logo");
     expect(dialog.textContent ?? "").toContain("Upload logo");
   });
+
 });

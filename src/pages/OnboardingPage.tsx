@@ -27,7 +27,7 @@ import {
   btnGhost,
   btnPrimary,
   inputClass,
-} from "../components/ui";
+} from "../components/primitives";
 import { LogoUpload } from "../components/LogoUpload";
 import { useWorkspace } from "../lib/workspace";
 import {

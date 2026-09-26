@@ -255,6 +255,110 @@ export interface InventoryRecommendation {
   competitorRef: string;
 }
 
+/* ---------------- Inventory & services ---------------- */
+
+export type InventoryKind = "product" | "service";
+export type InventoryStatus = "active" | "draft" | "archived";
+
+/**
+ * Something the business sells. Products carry stock; services do not. Both
+ * feed the ad designs built on the Promotions page, so each row can hold its
+ * own image.
+ */
+export interface InventoryItem {
+  id: string;
+  kind: InventoryKind;
+  name: string;
+  sku: string;
+  category: string;
+  description: string;
+  price: number;
+  /** Original price when the item is discounted, 0 when there is no discount. */
+  compareAtPrice: number;
+  /** Units on hand — products only, ignored for services. */
+  stock: number;
+  status: InventoryStatus;
+  /** Public URL (live) or data URL (demo) of the product/service image. */
+  imageUrl: string;
+  tags: string[];
+  createdAt: string;
+}
+
+/* ---------------- Promotions (ad briefs & delivered designs) ---------------- */
+
+export type PromotionTemplate = "square" | "story" | "landscape";
+
+/** The pieces a user can ask to be included in an ad design. */
+export type PromotionComponent =
+  | "product"
+  | "service"
+  | "price"
+  | "discount"
+  | "deal"
+  | "coupon"
+  | "logo"
+  | "contact"
+  | "rating";
+
+/** How the discount component is expressed — a percentage or a money amount. */
+export type DiscountKind = "percent" | "amount";
+
+/** Where a brief sits between being sent to us and the finished ad arriving. */
+export type PromotionBriefStatus = "submitted" | "in_design" | "delivered";
+
+/**
+ * What the business asks us to build. This is the brief a designer works from
+ * — it records the pieces to include and the values to use, not a rendered ad.
+ */
+export interface PromotionBrief {
+  id: string;
+  name: string;
+  /** The inventory product the design is built around. */
+  itemId: string | null;
+  /** The service the design is built around, when "service" is selected. */
+  serviceId: string | null;
+  /** The product or service the price refers to, when "price" is selected. */
+  priceItemId: string | null;
+  /** The contact details to show when "contact" is selected. */
+  contactInfo: string;
+  template: PromotionTemplate;
+  accentColor: string;
+  components: PromotionComponent[];
+  /** Only meaningful when `discount` is in `components`. */
+  discountKind: DiscountKind;
+  discountValue: number;
+  /** Free-text deal shown when the `deal` component is on, e.g. "Buy 2 get 1 free". */
+  dealText: string;
+  couponCode: string;
+  /** The message the user would like the ad to lead with. */
+  headline: string;
+  /** Anything else the design team should know about the look. */
+  notes: string;
+  status: PromotionBriefStatus;
+  submittedAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A finished ad we produced from a brief and pushed to Supabase. The user can
+ * open these from the Promotions page and export them.
+ */
+export interface DeliveredAd {
+  id: string;
+  /** The brief this design answers, when it came from one. */
+  briefId: string | null;
+  name: string;
+  template: PromotionTemplate;
+  /** Public URL of the creative in the `delivered-ads` bucket, empty until pushed. */
+  fileUrl: string;
+  /** Path inside the `delivered-ads` bucket, for reference. */
+  storagePath: string;
+  sizeMb: number;
+  downloads: number;
+  note: string;
+  deliveredAt: string;
+}
+
 export interface WeeklyReport {
   week: string;
   seoScore: number;
@@ -421,6 +525,11 @@ export interface WorkspaceData {
   adAssets: AdAsset[];
   socialScores: SocialScore[];
   inventoryRecommendations: InventoryRecommendation[];
+  inventory: InventoryItem[];
+  /** Ad briefs the business has sent us. */
+  promotionBriefs: PromotionBrief[];
+  /** Finished ad designs we have produced and pushed back to them. */
+  deliveredAds: DeliveredAd[];
   buyList: string[];
   scanRuns: ScanRun[];
   /** True while the workspace has no monitored data of its own yet. */

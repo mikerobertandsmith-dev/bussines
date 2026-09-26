@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  AtSign,
   CalendarClock,
-  ChevronRight,
   Mail,
   MessageSquare,
   Plus,
@@ -28,7 +26,8 @@ import {
   btnGhost,
   btnPrimary,
   inputClass,
-} from "../components/ui";
+} from "../components/primitives";
+import { CustomerTable } from "../components/customer-table";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toast";
 import { cadenceLabel, daysAhead, money, relativeTime, shortDate, titleCase } from "../lib/format";
@@ -233,106 +232,39 @@ export function ClientsPage() {
             title="Customer list"
             subtitle="Everyone who can be mailed, with their schedule"
             action={
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  className={`${inputClass} max-w-44`}
-                  placeholder="Search customers"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-                <Segmented
-                  size="sm"
-                  value={statusFilter}
-                  onChange={setStatusFilter}
-                  options={[
-                    { value: "active", label: "Active" },
-                    { value: "paused", label: "Paused" },
-                    { value: "prospect", label: "Prospects" },
-                    { value: "all", label: "All" },
-                  ]}
-                />
-              </div>
+              <Segmented
+                size="sm"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: "active", label: "Active" },
+                  { value: "paused", label: "Paused" },
+                  { value: "prospect", label: "Prospects" },
+                  { value: "all", label: "All" },
+                ]}
+              />
             }
           />
-          {visible.length === 0 ? (
-            <EmptyState
-              title="No customers in this view"
-              hint="Add a customer or switch the status filter."
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px]">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <Th>Customer</Th>
-                    <Th>Email</Th>
-                    <Th>Status</Th>
-                    <Th>Messages</Th>
-                    <Th>Next send</Th>
-                    <Th />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {visible.map((c) => (
-                    <tr
-                      key={c.id}
-                      onClick={() => setOpenClientId(c.id)}
-                      className="cursor-pointer align-top hover:bg-slate-50/70"
-                    >
-                      <Td>
-                        <span className="block font-medium text-slate-900">{c.name}</span>
-                        <span className="text-[11px] text-slate-500">
-                          {c.company} · {c.industry}
-                        </span>
-                      </Td>
-                      <Td>
-                        <span className="inline-flex items-center gap-1 text-xs text-slate-700">
-                          <AtSign size={11} /> {c.email}
-                        </span>
-                      </Td>
-                      <Td>
-                        <Badge
-                          tone={
-                            c.status === "active" ? "good" : c.status === "paused" ? "warn" : "info"
-                          }
-                        >
-                          {c.status}
-                        </Badge>
-                        <span className="mt-1 block text-[11px] text-slate-500">{c.tier} plan</span>
-                      </Td>
-                      <Td>
-                        <span className="block text-xs text-slate-700">
-                          {account.messageTypes.length} message type
-                          {account.messageTypes.length === 1 ? "" : "s"}
-                        </span>
-                        <span className="mt-1 block text-[11px] text-slate-500">
-                          {cadenceLabel(account.sendFrequency)} batch
-                        </span>
-                      </Td>
-                      <Td>
-                        <span className="block text-xs text-slate-700">{shortDate(c.nextSendAt)}</span>
-                        <span className="text-[11px] text-slate-500">
-                          sent {relativeTime(c.lastContacted)}
-                        </span>
-                      </Td>
-                      <Td>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenClientId(c.id);
-                          }}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
-                        >
-                          Manage <ChevronRight size={12} />
-                        </button>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+
+          <CustomerTable
+            clients={visible}
+            messageTypeCount={account.messageTypes.length}
+            sendFrequency={account.sendFrequency}
+            search={search}
+            onSearchChange={setSearch}
+            onOpen={setOpenClientId}
+            onEmail={(id) => sendTo([id])}
+            onToggleStatus={(c) => {
+              const next = c.status === "paused" ? "active" : "paused";
+              updateClient(c.id, { status: next });
+              toast(`${c.name} is now ${next === "active" ? "receiving" : "paused from"} sends.`);
+            }}
+            onRemove={(c) => {
+              void actions.removeClient(c.id);
+              toast(`${c.name} removed from the customer list.`);
+            }}
+          />
+
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
             <p className="text-[11px] text-slate-500">
               Open a customer to change their status. The send cadence and message types are set

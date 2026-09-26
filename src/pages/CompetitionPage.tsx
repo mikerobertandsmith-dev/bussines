@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import {
-  BarChart3,
   Binoculars,
   Download,
   ExternalLink,
@@ -23,15 +22,15 @@ import {
   EmptyState,
   Segmented,
   SiteLogo,
-  Stat,
   Tabs,
   Td,
   Th,
   btnGhost,
   btnPrimary,
   inputClass,
-} from "../components/ui";
+} from "../components/primitives";
 import { AreaChart, BarList, DeltaPill, Stars } from "../components/charts";
+import { StatusStatGrid, type StatStatus } from "../components/insights";
 import { useToast } from "../components/Toast";
 import { compact, daysAgo, money, relativeTime, shortDate, titleCase } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
@@ -113,10 +112,13 @@ export function CompetitionPage() {
   const ratingChange = Number(
     (((competitor.rating - competitor.previousRating) / competitor.previousRating) * 100).toFixed(1),
   );
+  const trafficShare = myBusiness.monthlyVisits / Math.max(1, competitor.monthlyVisits);
+  const trafficStatus: StatStatus =
+    trafficShare >= 0.9 ? "within" : trafficShare >= 0.5 ? "observe" : "critical";
 
   function createOriginalAd(headline: string) {
     toast(
-      `Original ad brief created from "${headline}" — added to My Business → Ad assets for approval.`,
+      `Ad brief drafted from "${headline}" — open Promotions to review it and send it to the design team.`,
     );
   }
 
@@ -170,34 +172,46 @@ export function CompetitionPage() {
         </div>
       </Card>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat
-          label="Their monthly traffic"
-          value={compact(competitor.monthlyVisits)}
-          delta={competitor.visitsChange}
-          icon={<BarChart3 size={16} />}
-          hint={`yours: ${compact(myBusiness.monthlyVisits)}`}
-        />
-        <Stat
-          label="SEO score"
-          value={competitor.seoScore}
-          icon={<Search size={16} />}
-          hint={`yours: ${myBusiness.seoScore} · GEO ${competitor.geoScore} vs ${myBusiness.geoScore}`}
-        />
-        <Stat
-          label="Active ad campaigns"
-          value={activeAds}
-          icon={<Megaphone size={16} />}
-          hint={competitor.adPlatforms.join(", ")}
-        />
-        <Stat
-          label="Rating (2 months)"
-          value={competitor.rating.toFixed(1)}
-          delta={ratingChange}
-          icon={<MessageSquareQuote size={16} />}
-          hint={`${competitor.reviewsThisMonth} new · ${negativeReviews} negative`}
-        />
-      </div>
+      <StatusStatGrid
+        items={[
+          {
+            name: "Their monthly traffic",
+            stat: compact(competitor.monthlyVisits),
+            meta: `yours: ${compact(myBusiness.monthlyVisits)}`,
+            progressLabel: "Your share of their traffic",
+            progress: myBusiness.monthlyVisits / Math.max(1, competitor.monthlyVisits),
+            status: trafficStatus,
+            hint: "Open traffic breakdown",
+          },
+          {
+            name: "SEO score",
+            stat: competitor.seoScore,
+            meta: `yours: ${myBusiness.seoScore} · GEO ${competitor.geoScore} vs ${myBusiness.geoScore}`,
+            progressLabel: "Their tracked-term coverage",
+            progress: competitor.seoScore / 100,
+            status: myBusiness.seoScore >= competitor.seoScore ? "within" : "observe",
+            hint: "Compare SEO",
+          },
+          {
+            name: "Active ad campaigns",
+            stat: activeAds,
+            meta: competitor.adPlatforms.join(", ") || "no platforms reported",
+            progressLabel: "Campaign feed coverage",
+            progress: activeAds / 8,
+            status: activeAds > 0 ? "observe" : "within",
+            hint: "See campaigns",
+          },
+          {
+            name: "Rating (2 months)",
+            stat: competitor.rating.toFixed(1),
+            meta: `${competitor.reviewsThisMonth} new · ${negativeReviews} negative`,
+            progressLabel: "Rating out of 5",
+            progress: competitor.rating / 5,
+            status: competitor.rating >= 4.3 ? "within" : "critical",
+            hint: "Read reviews",
+          },
+        ]}
+      />
 
       <Tabs
         value={tab}

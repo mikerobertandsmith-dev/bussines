@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
-  Boxes,
   ChevronRight,
   Download,
   ExternalLink,
@@ -28,13 +27,14 @@ import {
   btnPrimary,
   changeTone,
   inputClass,
-} from "../components/ui";
+} from "../components/primitives";
+import { AreaChart } from "../components/charts";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toast";
 import { alertsFor } from "../lib/alerts";
 import { cadenceLabel, daysAgo, money, relativeTime, shortDate, titleCase } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
-import type { Cadence, ChangeType, SupplierItem } from "../lib/types";
+import type { Cadence, ChangeType, SupplierItem, TrafficPoint } from "../lib/types";
 
 const CHANGE_TABS: { value: ChangeType | "all"; label: string }[] = [
   { value: "all", label: "All" },
@@ -121,8 +121,25 @@ export function SuppliersPage() {
   );
 
   const priceDrops = items.filter((i) => i.change === "price_change" && i.price < i.previousPrice);
-  const backInStock = items.filter((i) => i.change === "stock_change" && i.stock !== "out_of_stock");
   const newProducts = items.filter((i) => i.change === "new_product");
+
+  /** How many price drops landed on each of the last seven days. */
+  const priceDropTrend = useMemo<TrafficPoint[]>(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(start);
+      day.setDate(day.getDate() - (6 - index));
+      const next = new Date(day);
+      next.setDate(next.getDate() + 1);
+      const count = items.filter((i) => {
+        if (i.change !== "price_change" || i.price >= i.previousPrice) return false;
+        const at = new Date(i.detectedAt).getTime();
+        return at >= day.getTime() && at < next.getTime();
+      }).length;
+      return { label: day.toLocaleDateString(undefined, { weekday: "short" }), visits: count };
+    });
+  }, [items]);
 
   /** The cadence shown when every supplier shares one, otherwise the busiest. */
   const sharedCadence: Cadence =
@@ -192,7 +209,7 @@ export function SuppliersPage() {
 
   return (
     <div className="space-y-5">
-      {/* Summary first: four numbers, nothing else competing for attention. */}
+      {/* Summary first: the count of sites, what's new, then the price-drop trend. */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           label="Suppliers monitored"
@@ -206,18 +223,30 @@ export function SuppliersPage() {
           icon={<Sparkles size={16} />}
           hint="listed since the last scan"
         />
-        <Stat
-          label="Price drops"
-          value={priceDrops.length}
-          icon={<ArrowDownRight size={16} />}
-          hint="buy price lower than last scan"
-        />
-        <Stat
-          label="Waiting-list triggers"
-          value={backInStock.length}
-          icon={<Boxes size={16} />}
-          hint="back in stock or preorder open"
-        />
+        <Card className="p-4 sm:col-span-2">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">
+              Price drops
+            </p>
+            <span className="text-slate-400">
+              <ArrowDownRight size={16} />
+            </span>
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            <p className="text-2xl font-semibold tracking-tight text-slate-900">
+              {priceDrops.length}
+            </p>
+            <span className="text-xs text-slate-500">buy price lower than last scan · last 7 days</span>
+          </div>
+          <div className="mt-2">
+            <AreaChart
+              data={priceDropTrend}
+              color="#059669"
+              valueFormat={(n) => `${n} drop${n === 1 ? "" : "s"}`}
+              height={92}
+            />
+          </div>
+        </Card>
       </div>
 
       {alerts.length ? (

@@ -2,7 +2,7 @@ import { SignedIn, SignedOut } from "@clerk/clerk-react";
 import { AlertTriangle } from "lucide-react";
 import { Layout } from "./components/Layout";
 import { ToastProvider } from "./components/Toast";
-import { btnPrimary } from "./components/ui";
+import { btnPrimary } from "./components/primitives";
 import { authEnabled } from "./lib/env";
 import { useHashRoute, usePublicRoute } from "./lib/hooks";
 import { useWorkspace, WorkspaceLoading, WorkspaceProvider } from "./lib/workspace";
@@ -11,6 +11,9 @@ import { CompetitionPage } from "./pages/CompetitionPage";
 import { ClientsPage } from "./pages/ClientsPage";
 import { BusinessPage } from "./pages/BusinessPage";
 import { NotificationsPage } from "./pages/NotificationsPage";
+import { SocialPage } from "./pages/SocialPage";
+import { InventoryPage } from "./pages/InventoryPage";
+import { PromotionPage } from "./pages/PromotionPage";
 import { LandingPage } from "./pages/LandingPage";
 import { LoginPage } from "./pages/LoginPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
@@ -24,6 +27,9 @@ function AppShell() {
       {route === "competition" ? <CompetitionPage /> : null}
       {route === "clients" ? <ClientsPage /> : null}
       {route === "business" ? <BusinessPage /> : null}
+      {route === "social" ? <SocialPage /> : null}
+      {route === "inventory" ? <InventoryPage /> : null}
+      {route === "promotion" ? <PromotionPage /> : null}
       {route === "notifications" ? <NotificationsPage /> : null}
     </Layout>
   );

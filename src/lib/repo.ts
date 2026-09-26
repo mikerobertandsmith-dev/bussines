@@ -9,11 +9,14 @@ import type {
   CompetitorItem,
   CompetitorReview,
   GeoRankRow,
+  InventoryItem,
   InventoryRecommendation,
   MailAccount,
   MessageType,
   MyReview,
   OnboardingInput,
+  DeliveredAd,
+  PromotionBrief,
   RankRow,
   ReviewScan,
   ReviewSource,
@@ -231,6 +234,9 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     buyListRes,
     reportsRes,
     scanRunsRes,
+    inventoryRes,
+    promotionsRes,
+    deliveredAdsRes,
   ] = await Promise.all([
     db.from("suppliers").select("*").eq("business_id", id).order("name"),
     db.from("supplier_items").select("*").eq("business_id", id).order("detected_at", { ascending: false }).limit(300),
@@ -256,6 +262,9 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     db.from("buy_list_items").select("*").eq("business_id", id),
     db.from("weekly_reports").select("*").eq("business_id", id).order("week_start", { ascending: false }).limit(12),
     db.from("scan_runs").select("*").eq("business_id", id).order("started_at", { ascending: false }).limit(50),
+    db.from("inventory_items").select("*").eq("business_id", id).order("created_at", { ascending: false }),
+    db.from("promotion_briefs").select("*").eq("business_id", id).order("updated_at", { ascending: false }),
+    db.from("delivered_ads").select("*").eq("business_id", id).order("delivered_at", { ascending: false }),
   ]);
 
   const supplierRows = rows<Row>(suppliersRes);
@@ -585,6 +594,53 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
       priority: (r.priority ?? "medium") as InventoryRecommendation["priority"],
       competitorRef: str(r.competitor_ref),
     })),
+    inventory: rows<Row>(inventoryRes).map<InventoryItem>((i) => ({
+      id: i.id,
+      kind: (i.kind ?? "product") as InventoryItem["kind"],
+      name: str(i.name),
+      sku: str(i.sku),
+      category: str(i.category),
+      description: str(i.description),
+      price: num(i.price),
+      compareAtPrice: num(i.compare_at_price),
+      stock: num(i.stock),
+      status: (i.status ?? "active") as InventoryItem["status"],
+      imageUrl: str(i.image_url),
+      tags: (i.tags ?? []) as string[],
+      createdAt: str(i.created_at, new Date().toISOString()),
+    })),
+    promotionBriefs: rows<Row>(promotionsRes).map<PromotionBrief>((p) => ({
+      id: p.id,
+      name: str(p.name, "Untitled ad brief"),
+      itemId: p.item_id ? str(p.item_id) : null,
+      serviceId: p.service_id ? str(p.service_id) : null,
+      priceItemId: p.price_item_id ? str(p.price_item_id) : null,
+      contactInfo: str(p.contact_info),
+      template: (p.template ?? "square") as PromotionBrief["template"],
+      accentColor: str(p.accent_color, "#4f46e5"),
+      components: (p.components ?? []) as PromotionBrief["components"],
+      discountKind: (p.discount_kind ?? "percent") as PromotionBrief["discountKind"],
+      discountValue: num(p.discount_value),
+      dealText: str(p.deal_text),
+      couponCode: str(p.coupon_code),
+      headline: str(p.headline),
+      notes: str(p.notes),
+      status: (p.status ?? "submitted") as PromotionBrief["status"],
+      submittedAt: str(p.submitted_at, new Date().toISOString()),
+      updatedAt: str(p.updated_at, new Date().toISOString()),
+    })),
+    deliveredAds: rows<Row>(deliveredAdsRes).map<DeliveredAd>((a) => ({
+      id: a.id,
+      briefId: a.brief_id ? str(a.brief_id) : null,
+      name: str(a.name, "Ad design"),
+      template: (a.template ?? "square") as DeliveredAd["template"],
+      fileUrl: str(a.file_url),
+      storagePath: str(a.storage_path),
+      sizeMb: num(a.size_mb),
+      downloads: num(a.downloads),
+      note: str(a.note),
+      deliveredAt: str(a.delivered_at, new Date().toISOString()),
+    })),
     buyList: rows<Row>(buyListRes).map((b) => str(b.recommendation_id)),
     scanRuns: scanRows.map<ScanRun>((r) => ({
       id: r.id,
@@ -875,6 +931,163 @@ export async function markReviewScanComplete(businessId: string) {
     started_at: now,
     finished_at: now,
   });
+  if (error) throw new Error(error.message);
+}
+
+/* -------------------------------------------- inventory & promotions */
+
+type InventoryInput = Omit<InventoryItem, "id" | "createdAt">;
+
+function inventoryPayload(input: Partial<InventoryInput>): Row {
+  const payload: Row = {};
+  if (input.kind !== undefined) payload.kind = input.kind;
+  if (input.name !== undefined) payload.name = input.name;
+  if (input.sku !== undefined) payload.sku = input.sku;
+  if (input.category !== undefined) payload.category = input.category;
+  if (input.description !== undefined) payload.description = input.description;
+  if (input.price !== undefined) payload.price = input.price;
+  if (input.compareAtPrice !== undefined) payload.compare_at_price = input.compareAtPrice;
+  if (input.stock !== undefined) payload.stock = input.stock;
+  if (input.status !== undefined) payload.status = input.status;
+  if (input.imageUrl !== undefined) payload.image_url = input.imageUrl;
+  if (input.tags !== undefined) payload.tags = input.tags;
+  return payload;
+}
+
+function mapInventoryRow(row: Row): InventoryItem {
+  return {
+    id: row.id,
+    kind: (row.kind ?? "product") as InventoryItem["kind"],
+    name: str(row.name),
+    sku: str(row.sku),
+    category: str(row.category),
+    description: str(row.description),
+    price: num(row.price),
+    compareAtPrice: num(row.compare_at_price),
+    stock: num(row.stock),
+    status: (row.status ?? "active") as InventoryItem["status"],
+    imageUrl: str(row.image_url),
+    tags: (row.tags ?? []) as string[],
+    createdAt: str(row.created_at, new Date().toISOString()),
+  };
+}
+
+export async function createInventoryItem(
+  businessId: string,
+  input: InventoryInput,
+): Promise<InventoryItem> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from("inventory_items")
+    .insert({ business_id: businessId, ...inventoryPayload(input) })
+    .select()
+    .single();
+  if (error || !data) throw new Error(error?.message ?? "Could not save that item.");
+  return mapInventoryRow(data as Row);
+}
+
+export async function updateInventoryItem(itemId: string, patch: Partial<InventoryInput>) {
+  const db = requireSupabase();
+  const payload = inventoryPayload(patch);
+  if (!Object.keys(payload).length) return;
+  const { error } = await db.from("inventory_items").update(payload).eq("id", itemId);
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteInventoryItem(itemId: string) {
+  const db = requireSupabase();
+  const { error } = await db.from("inventory_items").delete().eq("id", itemId);
+  if (error) throw new Error(error.message);
+}
+
+/** Product/service image for the ad designs — public bucket, owner-scoped folder. */
+export async function uploadInventoryImage(ownerUserId: string, file: File): Promise<string> {
+  const db = requireSupabase();
+  const extension = (file.name.split(".").pop() ?? "png")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "") || "png";
+  const path = `${ownerUserId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+
+  const { error } = await db.storage.from("inventory-images").upload(path, file, {
+    upsert: true,
+    contentType: file.type || "image/png",
+  });
+  if (error) throw new Error(error.message);
+
+  const { data } = db.storage.from("inventory-images").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+type PromotionBriefInput = Omit<PromotionBrief, "id" | "submittedAt" | "updatedAt">;
+
+function promotionBriefPayload(input: Partial<PromotionBriefInput>): Row {
+  const payload: Row = {};
+  if (input.name !== undefined) payload.name = input.name;
+  if (input.itemId !== undefined) payload.item_id = input.itemId;
+  if (input.serviceId !== undefined) payload.service_id = input.serviceId;
+  if (input.priceItemId !== undefined) payload.price_item_id = input.priceItemId;
+  if (input.contactInfo !== undefined) payload.contact_info = input.contactInfo;
+  if (input.template !== undefined) payload.template = input.template;
+  if (input.accentColor !== undefined) payload.accent_color = input.accentColor;
+  if (input.components !== undefined) payload.components = input.components;
+  if (input.discountKind !== undefined) payload.discount_kind = input.discountKind;
+  if (input.discountValue !== undefined) payload.discount_value = input.discountValue;
+  if (input.dealText !== undefined) payload.deal_text = input.dealText;
+  if (input.couponCode !== undefined) payload.coupon_code = input.couponCode;
+  if (input.headline !== undefined) payload.headline = input.headline;
+  if (input.notes !== undefined) payload.notes = input.notes;
+  if (input.status !== undefined) payload.status = input.status;
+  return payload;
+}
+
+function mapPromotionBriefRow(row: Row): PromotionBrief {
+  return {
+    id: row.id,
+    name: str(row.name, "Untitled ad brief"),
+    itemId: row.item_id ? str(row.item_id) : null,
+    serviceId: row.service_id ? str(row.service_id) : null,
+    priceItemId: row.price_item_id ? str(row.price_item_id) : null,
+    contactInfo: str(row.contact_info),
+    template: (row.template ?? "square") as PromotionBrief["template"],
+    accentColor: str(row.accent_color, "#4f46e5"),
+    components: (row.components ?? []) as PromotionBrief["components"],
+    discountKind: (row.discount_kind ?? "percent") as PromotionBrief["discountKind"],
+    discountValue: num(row.discount_value),
+    dealText: str(row.deal_text),
+    couponCode: str(row.coupon_code),
+    headline: str(row.headline),
+    notes: str(row.notes),
+    status: (row.status ?? "submitted") as PromotionBrief["status"],
+    submittedAt: str(row.submitted_at, new Date().toISOString()),
+    updatedAt: str(row.updated_at, new Date().toISOString()),
+  };
+}
+
+export async function createPromotionBrief(
+  businessId: string,
+  input: PromotionBriefInput,
+): Promise<PromotionBrief> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from("promotion_briefs")
+    .insert({ business_id: businessId, ...promotionBriefPayload(input) })
+    .select()
+    .single();
+  if (error || !data) throw new Error(error?.message ?? "Could not send that brief.");
+  return mapPromotionBriefRow(data as Row);
+}
+
+export async function updatePromotionBrief(briefId: string, patch: Partial<PromotionBriefInput>) {
+  const db = requireSupabase();
+  const payload = promotionBriefPayload(patch);
+  if (!Object.keys(payload).length) return;
+  const { error } = await db.from("promotion_briefs").update(payload).eq("id", briefId);
+  if (error) throw new Error(error.message);
+}
+
+export async function deletePromotionBrief(briefId: string) {
+  const db = requireSupabase();
+  const { error } = await db.from("promotion_briefs").delete().eq("id", briefId);
   if (error) throw new Error(error.message);
 }
 

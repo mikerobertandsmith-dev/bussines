@@ -5,15 +5,10 @@ import {
   Download,
   FileText,
   Globe2,
-  Image as ImageIcon,
-  MessageSquareQuote,
   Package,
-  RefreshCw,
   Search,
-  Share2,
   ShoppingCart,
   Sparkles,
-  Store,
   Target,
   TrendingUp,
 } from "lucide-react";
@@ -22,22 +17,21 @@ import {
   Card,
   CardHead,
   EmptyState,
-  Notice,
   ScoreRing,
   Segmented,
-  Stat,
   Tabs,
   Td,
   Th,
   btnGhost,
   btnPrimary,
-} from "../components/ui";
-import { AreaChart, BarList, DeltaPill, ProgressRing, Sparkline, Stars } from "../components/charts";
+} from "../components/primitives";
+import { AreaChart, BarList, DeltaPill } from "../components/charts";
+import { MetricTile, ScoreRadialCard, TrafficTrendCard } from "../components/insights";
 import { useToast } from "../components/Toast";
-import { compact, money, relativeTime, shortDate } from "../lib/format";
+import { compact, money } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
 
-type BusinessTab = "overview" | "search" | "reviews" | "assets" | "social" | "stock";
+type BusinessTab = "overview" | "search" | "stock";
 
 /** Percent change that survives a missing previous value. */
 function deltaPct(current: number, previous: number): number {
@@ -63,25 +57,17 @@ export function BusinessPage() {
     metrics: myBusiness,
     profile,
     suppliers,
-    competitors,
-    adAssets,
-    socialScores,
     inventoryRecommendations,
     topSeoKeywords,
     topGeoKeywords,
     geoVisibility,
     weeklyReports,
-    reviewSources,
-    latestReviewScan,
     buyList,
   } = workspace;
 
   const [tab, setTab] = useState<BusinessTab>("overview");
   const [inventoryFilter, setInventoryFilter] = useState<"all" | "high" | "medium" | "low">("all");
 
-  const lastScan = latestReviewScan.scannedAt;
-  const decliningSource = reviewSources.find((s) => s.score < s.previousScore);
-  const baselinePending = myBusiness.seoScore === 0 && topSeoKeywords.length === 0;
   const seoDelta = deltaPct(myBusiness.seoScore, myBusiness.previousSeoScore);
   const geoDelta = deltaPct(myBusiness.geoScore, myBusiness.previousGeoScore);
   const industryDelta = myBusiness.industryRankPrevious - myBusiness.industryRank;
@@ -89,27 +75,6 @@ export function BusinessPage() {
   const recommendations = inventoryRecommendations.filter((r) =>
     inventoryFilter === "all" ? true : r.priority === inventoryFilter,
   );
-
-  function runReviewScan() {
-    void actions.runReviewScan();
-    toast("Review scan queued — new reviews and replies appear as soon as it finishes.");
-  }
-
-  function downloadAdPack(product: string, sku: string, url: string, size: number) {
-    downloadText(
-      `${sku}-ad-pack-manifest.txt`,
-      [
-        `Market Watch ad pack for ${product} (${sku})`,
-        `Figma working file: see Ad assets table`,
-        `Bundle: ${url}`,
-        `Approx size: ${size} MB`,
-        `Formats included: see table listing`,
-        "",
-        "Drop the exported creatives into the client's approval folder before publishing.",
-      ].join("\n"),
-    );
-    toast(`Downloading the ${product} photo shoot + ad pack.`);
-  }
 
   function downloadReport() {
     const report = weeklyReports[0];
@@ -174,66 +139,51 @@ export function BusinessPage() {
 
   return (
     <div className="space-y-5">
-      {baselinePending ? (
-        <Notice
-          tone="info"
-          icon={<Sparkles size={15} />}
-          title="Your first baseline scan is pending"
-        >
-          <p className="text-xs">
-            SEO, GEO, traffic, review and social numbers appear here after the first scan of{" "}
-            {profile.primaryDomain || "your domain"} completes. Suppliers, competitors and clients are
-            already set up from onboarding.
-          </p>
-        </Notice>
-      ) : null}
-
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat
+        <ScoreRadialCard
           label="SEO score"
-          value={`${myBusiness.seoScore}/100`}
-          delta={seoDelta}
+          value={myBusiness.seoScore}
           icon={<Search size={16} />}
-          visual={<ProgressRing value={myBusiness.seoScore} color="#4f46e5" />}
+          color="var(--chart-1)"
           hint={
-            myBusiness.previousSeoScore
-              ? `was ${myBusiness.previousSeoScore} last week`
-              : "first baseline pending"
+            <span className="flex items-center gap-2">
+              {seoDelta >= 0 ? `+${seoDelta}%` : `${seoDelta}%`}
+              <span className="text-xs font-normal text-muted-foreground">
+                {myBusiness.previousSeoScore
+                  ? `was ${myBusiness.previousSeoScore} last week`
+                  : "first baseline pending"}
+              </span>
+            </span>
           }
         />
-        <Stat
+        <ScoreRadialCard
           label="GEO / AI visibility"
-          value={`${myBusiness.geoScore}/100`}
-          delta={geoDelta}
+          value={myBusiness.geoScore}
           icon={<Bot size={16} />}
-          visual={<ProgressRing value={myBusiness.geoScore} color="#0d9488" />}
-          hint="cited in AI answers"
-        />
-        <Stat
-          label="Website traffic"
-          value={compact(myBusiness.monthlyVisits)}
-          delta={myBusiness.visitsChange}
-          icon={<BarChart3 size={16} />}
-          visual={
-            myBusiness.traffic.length > 1 ? (
-              <Sparkline values={myBusiness.traffic.map((t) => t.visits)} color="#4f46e5" />
-            ) : null
+          color="var(--chart-3)"
+          hint={
+            <span className="flex items-center gap-2">
+              {geoDelta >= 0 ? `+${geoDelta}%` : `${geoDelta}%`}
+              <span className="text-xs font-normal text-muted-foreground">
+                cited in AI answers
+              </span>
+            </span>
           }
-          hint="visits in the last 30 days"
         />
-        <Stat
+        <TrafficTrendCard
+          className="sm:col-span-2 xl:col-span-2"
+          label="Website traffic"
+          points={myBusiness.traffic}
+          total={myBusiness.monthlyVisits}
+          changePct={myBusiness.visitsChange}
+          icon={<BarChart3 size={16} />}
+          caption="Visits in the last 30 days"
+        />
+        <MetricTile
+          className="sm:col-span-2 xl:col-span-4"
           label="Industry rank"
           value={myBusiness.industryRank ? `#${myBusiness.industryRank}` : "—"}
           icon={<TrendingUp size={16} />}
-          visual={
-            myBusiness.industryRank && myBusiness.industryRankPrevious ? (
-              // Lower rank is better, so invert it — the line reads upward when the position improves.
-              <Sparkline
-                values={[myBusiness.industryRankPrevious, myBusiness.industryRank].map((r) => -r)}
-                color={industryDelta >= 0 ? "#059669" : "#e11d48"}
-              />
-            ) : null
-          }
           hint={`${industryDelta >= 0 ? "up" : "down"} ${Math.abs(industryDelta)} places in ${profile.industry || "your industry"}`}
         />
       </div>
@@ -249,9 +199,6 @@ export function BusinessPage() {
             icon: <Search size={13} />,
             count: topSeoKeywords.length + topGeoKeywords.length,
           },
-          { value: "reviews", label: "Reviews", icon: <MessageSquareQuote size={13} /> },
-          { value: "assets", label: "Ad assets", icon: <ImageIcon size={13} />, count: adAssets.length },
-          { value: "social", label: "Social", icon: <Share2 size={13} /> },
           {
             value: "stock",
             label: "Buy list",
@@ -489,334 +436,6 @@ export function BusinessPage() {
                 ))}
               </div>
             )}
-          </Card>
-        </div>
-      ) : null}
-
-      {tab === "reviews" ? (
-        <div className="grid gap-5 xl:grid-cols-3">
-          <Card className="xl:col-span-2">
-            <CardHead
-              icon={<MessageSquareQuote size={16} />}
-              title="Review page analysis — last 2 months"
-              subtitle="Every review source, its score trend and how it is moving"
-            />
-            {reviewSources.length === 0 ? (
-              <EmptyState
-                title="No review data yet"
-                hint="Review sources are added automatically once the first review scan runs."
-              />
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {reviewSources.map((s) => (
-                  <div key={s.source} className="grid gap-3 px-4 py-4 md:grid-cols-3">
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">{s.source}</p>
-                      <div className="mt-1 flex items-center gap-2">
-                        <Stars rating={s.score} size={14} />
-                        <span className="text-sm font-semibold text-slate-900">
-                          {s.score.toFixed(1)}
-                        </span>
-                        <DeltaPill value={deltaPct(s.score, s.previousScore)} />
-                      </div>
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {s.reviews.toLocaleString()} reviews · {s.newThisMonth} new this month
-                      </p>
-                    </div>
-                    <div className="md:col-span-2">
-                      <AreaChart
-                        data={s.series}
-                        color={s.score < s.previousScore ? "#e11d48" : "#059669"}
-                        valueFormat={(n) => n.toFixed(2)}
-                        height={110}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
-              {decliningSource
-                ? `${decliningSource.source} is trending down (${decliningSource.score} from ${decliningSource.previousScore}). Most complaints mention delivery timing, not product quality.`
-                : "Every review source is stable or improving over the last two months."}
-            </div>
-          </Card>
-
-          <Card>
-            <CardHead
-              icon={<RefreshCw size={16} />}
-              title="Latest review scan"
-              subtitle={`Scanned ${relativeTime(lastScan)} · next ${shortDate(latestReviewScan.nextScanAt)}`}
-              action={
-                <button type="button" className={btnPrimary} onClick={runReviewScan}>
-                  <RefreshCw size={13} /> Scan now
-                </button>
-              }
-            />
-            <div className="grid grid-cols-3 gap-2 border-b border-slate-100 px-4 py-3 text-center">
-              <div>
-                <p className="text-lg font-semibold text-slate-900">{latestReviewScan.newReviews}</p>
-                <p className="text-[10px] text-slate-500 uppercase">New reviews</p>
-              </div>
-              <div>
-                <p className="text-lg font-semibold text-rose-600">{latestReviewScan.flagged}</p>
-                <p className="text-[10px] text-slate-500 uppercase">Need reply</p>
-              </div>
-              <div>
-                <p className="text-lg font-semibold text-slate-900">
-                  {latestReviewScan.averageRating}
-                </p>
-                <p className="text-[10px] text-slate-500 uppercase">Avg rating</p>
-              </div>
-            </div>
-            {latestReviewScan.items.length === 0 ? (
-              <EmptyState
-                title="No reviews captured yet"
-                hint="Run the scan once your review pages are connected."
-              />
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {latestReviewScan.items.map((r) => (
-                  <li key={r.id} className="px-4 py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-semibold text-slate-800">{r.author}</span>
-                      <Stars rating={r.rating} />
-                    </div>
-                    <p className="mt-1 text-[11px] text-slate-600">{r.text}</p>
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      {r.source} · {relativeTime(r.postedAt)}
-                    </p>
-                    <p className="mt-1.5 rounded bg-indigo-50 px-2 py-1 text-[11px] text-indigo-700">
-                      {r.action}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-      ) : null}
-
-      {tab === "assets" ? (
-        <Card>
-          <CardHead
-            icon={<ImageIcon size={16} />}
-            title="Product photo shoots & ad designs"
-            subtitle="Professional shoot files plus the Figma ad designs built for each inventory product"
-          />
-          {adAssets.length === 0 ? (
-            <EmptyState
-              title="No ad assets yet"
-              hint="Original creatives and photo shoots appear here once your first product brief is produced."
-            />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px]">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <Th>Product</Th>
-                    <Th>Formats</Th>
-                    <Th>Shoot</Th>
-                    <Th>Status</Th>
-                    <Th className="text-right">Downloads</Th>
-                    <Th />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {adAssets.map((a) => (
-                    <tr key={a.id} className="align-top hover:bg-slate-50/70">
-                      <Td>
-                        <span className="block font-medium text-slate-900">{a.product}</span>
-                        <span className="text-[11px] text-slate-500">
-                          {a.sku} · {a.sizeMb ? `${a.sizeMb} MB` : "not exported yet"}
-                        </span>
-                      </Td>
-                      <Td>
-                        <span className="flex flex-wrap gap-1">
-                          {a.formats.map((f) => (
-                            <Badge key={f}>{f}</Badge>
-                          ))}
-                        </span>
-                      </Td>
-                      <Td className="text-xs text-slate-600">
-                        {shortDate(a.shootDate)}
-                        <span className="mt-0.5 block text-[11px] text-slate-400">
-                          {relativeTime(a.shootDate)}
-                        </span>
-                      </Td>
-                      <Td>
-                        <Badge
-                          tone={
-                            a.shootStatus === "ready"
-                              ? "good"
-                              : a.shootStatus === "editing"
-                                ? "warn"
-                                : "info"
-                          }
-                        >
-                          {a.shootStatus}
-                        </Badge>
-                      </Td>
-                      <Td className="text-right text-xs text-slate-600">{a.downloads}</Td>
-                      <Td>
-                        <span className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            className={btnPrimary}
-                            onClick={() =>
-                              downloadAdPack(
-                                a.product,
-                                a.sku,
-                                a.downloadUrl ?? a.storagePath ?? a.figmaUrl,
-                                a.sizeMb,
-                              )
-                            }
-                          >
-                            <Download size={13} /> Download pack
-                          </button>
-                          <a href={a.figmaUrl} target="_blank" rel="noreferrer" className={btnGhost}>
-                            <Sparkles size={13} /> Open in Figma
-                          </a>
-                        </span>
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
-            Designs are always original — a competitor's promotion is used as a signal, never as
-            artwork to copy.
-          </div>
-        </Card>
-      ) : null}
-
-      {tab === "social" ? (
-        <div className="grid gap-5 xl:grid-cols-3">
-          <Card className="xl:col-span-2">
-            <CardHead
-              icon={<Share2 size={16} />}
-              title="Social media score & where to focus"
-              subtitle="Your score per platform next to the best competitor on that platform"
-            />
-            {socialScores.length === 0 ? (
-              <EmptyState
-                title="No social scores yet"
-                hint="Add your social handles in business settings and the next scan will score them."
-              />
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px]">
-                  <thead className="bg-slate-50">
-                    <tr>
-                      <Th>Platform</Th>
-                      <Th className="text-center">Your score</Th>
-                      <Th className="text-right">Followers</Th>
-                      <Th className="text-right">Growth</Th>
-                      <Th className="text-right">Gap to best</Th>
-                      <Th>Focus</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {socialScores.map((s) => (
-                      <tr key={s.platform} className="hover:bg-slate-50/70">
-                        <Td>
-                          <span className="block font-medium text-slate-900">{s.platform}</span>
-                          <span className="text-[11px] text-slate-500">{s.handle}</span>
-                        </Td>
-                        <Td className="text-center">
-                          <span className="text-sm font-semibold text-slate-900">{s.score}</span>
-                          <div className="mx-auto mt-1 h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
-                            <div
-                              className={`h-full rounded-full ${
-                                s.score >= 65
-                                  ? "bg-emerald-500"
-                                  : s.score >= 45
-                                    ? "bg-amber-500"
-                                    : "bg-rose-500"
-                              }`}
-                              style={{ width: `${s.score}%` }}
-                            />
-                          </div>
-                        </Td>
-                        <Td className="text-right text-xs text-slate-600">
-                          {compact(s.followers)}
-                        </Td>
-                        <Td className="text-right text-xs text-emerald-600">
-                          +{s.growth.toFixed(1)}%
-                        </Td>
-                        <Td className="text-right text-xs text-rose-600">{s.benchmarkGap}</Td>
-                        <Td>
-                          <Badge
-                            tone={
-                              s.focus === "high" ? "bad" : s.focus === "medium" ? "warn" : "neutral"
-                            }
-                          >
-                            {s.focus} priority
-                          </Badge>
-                          <span className="mt-1 block max-w-64 text-[11px] text-slate-500">
-                            {s.reason}
-                          </span>
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-600">
-              Focus first on{" "}
-              <span className="font-medium">
-                {socialScores
-                  .filter((s) => s.focus === "high")
-                  .map((s) => s.platform)
-                  .join(" and ")}
-              </span>{" "}
-              — those are the channels where competitors pull the most extra traffic and where your
-              scores are furthest behind.
-            </div>
-          </Card>
-
-          <Card>
-            <CardHead
-              icon={<Store size={16} />}
-              title="Competitor benchmarks"
-              subtitle="Who leads the channels you are chasing"
-            />
-            {competitors.length === 0 ? (
-              <EmptyState
-                title="No competitors tracked"
-                hint="Add competitor websites during setup to benchmark against them."
-              />
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {competitors.map((c) => (
-                  <li key={c.id} className="px-4 py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-slate-900">{c.name}</span>
-                      <Badge tone={c.monthlyVisits > myBusiness.monthlyVisits ? "bad" : "good"}>
-                        {c.monthlyVisits > myBusiness.monthlyVisits ? "ahead" : "behind you"}
-                      </Badge>
-                    </div>
-                    <div className="mt-1.5 flex flex-wrap gap-3 text-[11px] text-slate-500">
-                      <span>{compact(c.monthlyVisits)} visits</span>
-                      <span>SEO {c.seoScore}</span>
-                      <span>GEO {c.geoScore}</span>
-                      {c.social[0] ? (
-                        <span>
-                          {c.social[0].followers.toLocaleString()} on {c.social[0].platform}
-                        </span>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
-              Your best lever is SEO: you are already close on traffic but two competitors still beat
-              your SEO and GEO scores.
-            </div>
           </Card>
         </div>
       ) : null}
