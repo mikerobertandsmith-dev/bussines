@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { UserButton, useClerk } from "@clerk/clerk-react";
+import { useClerk } from "@clerk/clerk-react";
 import {
   Bell,
   Binoculars,
@@ -12,7 +12,6 @@ import {
   Megaphone,
   Menu,
   Share2,
-  ShieldCheck,
   Truck,
   X,
 } from "lucide-react";
@@ -44,17 +43,17 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         hint: "Traffic, SEO, ads & reviews",
         icon: <Binoculars size={17} />,
       },
-      {
-        id: "social",
-        label: "Social & reviews",
-        hint: "Your reviews, social and competitor benchmarks",
-        icon: <Share2 size={17} />,
-      },
     ],
   },
   {
     label: "Grow",
     items: [
+      {
+        id: "business",
+        label: "My Business",
+        hint: "SEO, GEO & ad assets",
+        icon: <Building2 size={17} />,
+      },
       {
         id: "clients",
         label: "Clients",
@@ -62,10 +61,10 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
         icon: <Mail size={17} />,
       },
       {
-        id: "business",
-        label: "My Business",
-        hint: "SEO, GEO & ad assets",
-        icon: <Building2 size={17} />,
+        id: "social",
+        label: "Social & reviews",
+        hint: "Your reviews, social and competitor benchmarks",
+        icon: <Share2 size={17} />,
       },
     ],
   },
@@ -194,42 +193,33 @@ export function Layout({
             navOpen ? "translate-x-0" : "-translate-x-full"
           } ${hovered ? "w-64" : "w-64 lg:w-[76px]"}`}
         >
-          {/* Brand block — plain, as it was before the profile moved to the top bar. */}
-          <div
-            className={`flex items-center justify-between px-2 pt-4 ${
-              hovered ? "" : "lg:justify-center"
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white">
-                <ShieldCheck size={18} />
-              </span>
-              <div className={`min-w-0 ${hovered ? "" : "lg:hidden"}`}>
-                <p className="truncate text-sm font-semibold text-white">{brand}</p>
-                <p className="text-[11px] text-slate-400">Market Watch desk</p>
-              </div>
-            </div>
+          {/* Close control for the mobile drawer; the brand lives in the top bar. */}
+          <div className="flex items-center justify-end px-3 pt-3 lg:hidden">
             <button
               type="button"
               onClick={() => setNavOpen(false)}
-              className="rounded p-1 text-slate-400 hover:text-white lg:hidden"
+              className="rounded p-1 text-slate-400 hover:text-white"
               aria-label="Close navigation"
             >
               <X size={16} />
             </button>
           </div>
 
-          <nav className="mt-4 flex-1 space-y-5 overflow-y-auto px-3 pb-4">
-            {NAV_GROUPS.map((group) => (
-              <div key={group.label}>
+          <nav className="mt-2 flex-1 overflow-y-auto px-3 pb-4">
+            {NAV_GROUPS.map((group, index) => (
+              <div
+                key={group.label}
+                className={index > 0 ? "mt-5 border-t border-slate-800 pt-5" : ""}
+              >
                 <p
-                  className={`px-3 pb-1.5 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase ${
+                  className={`mb-2 px-3 text-[10px] font-semibold tracking-[0.14em] text-slate-500 uppercase ${
                     hovered ? "" : "lg:hidden"
                   }`}
                 >
                   {group.label}
                 </p>
-                <div className="space-y-1">
+
+                <div className="space-y-2">
                   {group.items.map((item) => {
                     const active = route === item.id;
                     return (
@@ -325,6 +315,20 @@ export function Layout({
                 )}
                 <button
                   type="button"
+                  onClick={() => navigate("notifications")}
+                  className="relative rounded-lg border border-slate-200 p-2 text-slate-600 transition hover:bg-slate-50"
+                  aria-label="Notifications"
+                  title="Notifications"
+                >
+                  <Bell size={16} />
+                  {alerts.length ? (
+                    <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
+                      {alerts.length}
+                    </span>
+                  ) : null}
+                </button>
+                <button
+                  type="button"
                   onClick={() => setSettingsOpen(true)}
                   title="Business profile"
                   aria-label="Business profile"
@@ -341,21 +345,6 @@ export function Layout({
                   </span>
                   <ChevronDown size={13} className="text-slate-400" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => navigate("notifications")}
-                  className="relative rounded-lg border border-slate-200 p-2 text-slate-600 transition hover:bg-slate-50"
-                  aria-label="Notifications"
-                  title="Notifications"
-                >
-                  <Bell size={16} />
-                  {alerts.length ? (
-                    <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-semibold text-white">
-                      {alerts.length}
-                    </span>
-                  ) : null}
-                </button>
-                {authEnabled ? <UserButton afterSignOutUrl="/" /> : null}
               </div>
             </div>
 

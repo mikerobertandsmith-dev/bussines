@@ -123,7 +123,7 @@ describe("Market Watch app", () => {
   it("keeps the dashboard reachable in demo mode without auth keys", async () => {
     await render();
     expect(text()).toContain("Demo data");
-    expect(text()).toContain("Market Watch");
+    expect(text()).toContain("Supplier updates");
     expect(container.querySelector("nav")).not.toBeNull();
   });
 
