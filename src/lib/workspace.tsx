@@ -14,15 +14,19 @@ import { sampleProfile, sampleWorkspace } from "../data/sample";
 import {
   addBuyListItem,
   createClientRow,
+  createCompetitorRow,
   createInventoryItem,
   createPromotionBrief,
+  createSupplierRow,
   createWorkspaceFromOnboarding,
   deleteBrandLogo,
   deleteClientRow,
+  deleteCompetitorRow,
   deleteCompetitorSocialHandle,
   deleteInventoryItem,
   deletePromotionBrief,
   deleteReviewConnection,
+  deleteSupplierRow,
   fetchBusiness,
   loadWorkspace,
   logSentMessages,
@@ -32,13 +36,16 @@ import {
   saveKeywordIdea as saveTrackedKeyword,
   saveMailAccountRow,
   saveCompetitorSocialHandle,
+  saveCompetitorSocialHandles,
   saveReviewConnection,
   setCompetitorCadence,
   setSupplierCadence,
   updateBrandLogo,
   updateClientRow,
+  updateCompetitorRow,
   updateInventoryItem,
   updatePromotionBrief,
+  updateSupplierRow,
   uploadBrandLogo,
   uploadInventoryImage as uploadInventoryImageFile,
 } from "./repo";
@@ -54,14 +61,24 @@ import {
   type SocialAccountsResult,
   type SocialScanResult,
 } from "./integrations";
-import { sampleAdAngles, sampleKeywordClusters, sampleKeywordIdeas, sampleReplyDraft } from "../data/business";
+import {
+  sampleAdAngles,
+  sampleKeywordClusters,
+  sampleKeywordIdeas,
+  sampleReplyDraft,
+  sampleSocialSuggestions,
+} from "../data/business";
 import { sampleSocialAccounts } from "../data/commerce";
 import { setAccessTokenProvider } from "./supabase";
-import { nextSendFrom } from "./schedule";
+import { nextScanFrom, nextSendFrom } from "./schedule";
 import type {
   BusinessProfile,
   Cadence,
   Client,
+  Competitor,
+  CompetitorInput,
+  CompetitorSocialInput,
+  ContactDiscoveryResult,
   DiscountKind,
   InventoryItem,
   KeywordIdea,
@@ -75,6 +92,8 @@ import type {
   SendFrequency,
   SocialChannel,
   SocialPublishJob,
+  Supplier,
+  SupplierInput,
   WorkspaceData,
 } from "./types";
 import {
@@ -89,7 +108,11 @@ import {
  * none of the measured numbers invented — a scan that never ran has nothing to
  * report, and sample data would make the page look like it had.
  */
-function demoSocialChannel(platform: string, handle: string): SocialChannel {
+function demoSocialChannel(
+  platform: string,
+  handle: string,
+  source: SocialChannel["source"] = "manual",
+): SocialChannel {
   const normalised = normaliseSocialHandle(handle);
   if (!normalised) {
     throw new Error("Add the competitor's handle or their full profile URL.");
@@ -101,6 +124,117 @@ function demoSocialChannel(platform: string, handle: string): SocialChannel {
     engagementRate: 0,
     postsPerWeek: 0,
     adsRunning: 0,
+    source,
+  };
+}
+
+/**
+ * A competitor added in demo mode (or before the database is reachable).
+ *
+ * Every measured field starts empty on purpose: a source that has never been
+ * scanned has no traffic, keywords, ads or reviews, and inventing sample numbers
+ * for it would make the page claim data that does not exist.
+ */
+function demoCompetitor(input: CompetitorInput): Competitor {
+  return {
+    id: `cmp-${Date.now()}`,
+    name: input.name.trim(),
+    website: input.website.trim(),
+    cadence: input.cadence,
+    notes: input.notes?.trim() || undefined,
+    lastScan: new Date().toISOString(),
+    monthlyVisits: 0,
+    visitsChange: 0,
+    traffic: [],
+    trafficSources: [],
+    seoScore: 0,
+    geoScore: 0,
+    social: [],
+    adPlatforms: [],
+    rating: 0,
+    previousRating: 0,
+    reviewCount: 0,
+    reviewsThisMonth: 0,
+    reviewTrend: [],
+    reviews: [],
+    audience: [],
+    ads: [],
+    newItems: [],
+    keywordGap: [],
+  };
+}
+
+/** A supplier added in demo mode, with onboarding's own defaults. */
+function demoSupplier(input: SupplierInput): Supplier {
+  return {
+    id: `sup-${Date.now()}`,
+    name: input.name.trim(),
+    website: input.website.trim(),
+    category: input.category?.trim() ?? "",
+    cadence: input.cadence,
+    lastScan: new Date().toISOString(),
+    nextScan: nextScanFrom(input.cadence),
+    scanHealth: 100,
+    accountManager: "",
+    leadTimeDays: input.leadTimeDays ?? 0,
+    notes: input.notes?.trim() || undefined,
+  };
+}
+
+/**
+ * What the database's upsert does to a competitor's channels: one row per
+ * platform, so saving a platform that is already tracked replaces its handle
+ * rather than stacking a second scrape target.
+ */
+function withSocialChannels(
+  competitors: Competitor[],
+  competitorId: string,
+  channels: SocialChannel[],
+): Competitor[] {
+  if (!channels.length) return competitors;
+  return competitors.map((c) =>
+    c.id === competitorId
+      ? { ...c, social: channels.reduce(mergeSocialChannel, c.social) }
+      : c,
+  );
+}
+
+/** The demo-mode equivalent of the bulk upsert: normalise, then merge. */
+function demoSocialChannels(
+  handles: CompetitorSocialInput[],
+  source: SocialChannel["source"],
+): SocialChannel[] {
+  return handles.flatMap((row) => {
+    try {
+      // A row may carry its own provenance — onboarding records an accepted
+      // proposal as `discovered` and a corrected one as `manual` in the same save.
+      return [demoSocialChannel(row.platform, row.handle, row.source ?? source)];
+    } catch {
+      // A row we cannot address is dropped rather than thrown on: the form
+      // reports the problem, and one bad row must not lose the good ones.
+      return [];
+    }
+  });
+}
+
+/** Removes a competitor and everything the database cascade would take with it. */
+function withoutCompetitor(data: WorkspaceData, competitorId: string): WorkspaceData {
+  return {
+    ...data,
+    competitors: data.competitors.filter((c) => c.id !== competitorId),
+    socialPosts: data.socialPosts.filter((p) => p.competitorId !== competitorId),
+    socialMonitorTargets: data.socialMonitorTargets.filter((t) => t.competitorId !== competitorId),
+    competitorReviewGaps: data.competitorReviewGaps.filter((g) => g.competitorId !== competitorId),
+    shareOfVoice: data.shareOfVoice.filter((s) => s.competitorId !== competitorId),
+  };
+}
+
+/** Removes a supplier and the detected items that belong to it. */
+function withoutSupplier(data: WorkspaceData, supplierId: string): WorkspaceData {
+  return {
+    ...data,
+    suppliers: data.suppliers.filter((s) => s.id !== supplierId),
+    supplierItems: data.supplierItems.filter((i) => i.supplierId !== supplierId),
   };
 }
 
@@ -109,6 +243,52 @@ export interface WorkspaceActions {
   scanSupplier: (supplierId: string) => Promise<void>;
   setCompetitorCadence: (competitorId: string, cadence: Cadence) => Promise<void>;
   scanCompetitor: (competitorId: string) => Promise<void>;
+  /**
+   * Adds a competitor to the watched list. Resolves with the created source so the
+   * page can select it straight away.
+   */
+  addCompetitor: (input: CompetitorInput) => Promise<Competitor>;
+  /** Edits the columns the competitor form owns. */
+  updateCompetitor: (competitorId: string, patch: Partial<CompetitorInput>) => Promise<void>;
+  /**
+   * Stops watching a competitor. Everything that hangs off it goes too — metrics,
+   * handles, keywords, ads, reviews and scraped posts. There is no undo.
+   */
+  removeCompetitor: (competitorId: string) => Promise<void>;
+  /** Adds a supplier site to watch. Resolves with the created source. */
+  addSupplier: (input: SupplierInput) => Promise<Supplier>;
+  /** Edits the columns the supplier form owns. */
+  updateSupplier: (supplierId: string, patch: Partial<SupplierInput>) => Promise<void>;
+  /** Stops watching a supplier. Its detected items go too. */
+  removeSupplier: (supplierId: string) => Promise<void>;
+  /**
+   * Saves a competitor's whole set of social profiles at once — the onboarding
+   * path, where one competitor can arrive with several. One row per platform, so
+   * re-saving a platform replaces its handle.
+   */
+  saveCompetitorSocials: (input: {
+    competitorId: string;
+    handles: CompetitorSocialInput[];
+    source?: "manual" | "discovered" | "imported";
+  }) => Promise<void>;
+  /**
+   * Reads a competitor's stored website through the contacts actor and proposes
+   * the social profiles it mentions. Writes nothing to `competitor_social`: the
+   * proposals come back for a person to accept, because every accepted handle
+   * becomes a billed scrape target.
+   */
+  findCompetitorSocials: (input: {
+    competitorId: string;
+  }) => Promise<ContactDiscoveryResult | null>;
+  /**
+   * The same read for a website that is not a stored competitor yet — onboarding
+   * happens before the competitor row exists, so there is nothing to write state
+   * onto. Authors nothing at all.
+   */
+  previewCompetitorSocials: (input: {
+    url: string;
+    label?: string;
+  }) => Promise<ContactDiscoveryResult | null>;
   addClient: (input: {
     name: string;
     email: string;
@@ -325,6 +505,73 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
             c.id === competitorId ? { ...c, lastScan: now } : c,
           ),
         }));
+      },
+      async addCompetitor(input) {
+        const created = demoCompetitor(input);
+        patchData((current) => ({ ...current, competitors: [...current.competitors, created] }));
+        return created;
+      },
+      async updateCompetitor(competitorId, patch) {
+        patchData((current) => ({
+          ...current,
+          competitors: current.competitors.map((c) =>
+            c.id === competitorId ? { ...c, ...patch } : c,
+          ),
+        }));
+      },
+      async removeCompetitor(competitorId) {
+        patchData((current) => withoutCompetitor(current, competitorId));
+      },
+      async addSupplier(input) {
+        const created = demoSupplier(input);
+        patchData((current) => ({ ...current, suppliers: [...current.suppliers, created] }));
+        return created;
+      },
+      async updateSupplier(supplierId, patch) {
+        patchData((current) => ({
+          ...current,
+          suppliers: current.suppliers.map((s) =>
+            s.id === supplierId
+              ? {
+                  ...s,
+                  ...patch,
+                  // A cadence change re-schedules the next check, the way the
+                  // database path does, so the two cannot drift.
+                  nextScan: patch.cadence !== undefined ? nextScanFrom(patch.cadence) : s.nextScan,
+                }
+              : s,
+          ),
+        }));
+      },
+      async removeSupplier(supplierId) {
+        patchData((current) => withoutSupplier(current, supplierId));
+      },
+      async saveCompetitorSocials(input) {
+        const channels = demoSocialChannels(input.handles, input.source ?? "manual");
+        if (!channels.length) return;
+        patchData((current) => ({
+          ...current,
+          competitors: withSocialChannels(current.competitors, input.competitorId, channels),
+        }));
+      },
+      async findCompetitorSocials(input) {
+        // Demo mode proposes the canned set for the competitor's own website and
+        // writes nothing to `competitor_social`: no actor, no key, no spend — but
+        // the accept flow, and the last-checked line, are the real ones.
+        const competitor = data.competitors.find((c) => c.id === input.competitorId);
+        const scannedAt = new Date().toISOString();
+        patchData((current) => ({
+          ...current,
+          competitors: current.competitors.map((c) =>
+            c.id === input.competitorId
+              ? { ...c, contactsStatus: "done", contactsScannedAt: scannedAt }
+              : c,
+          ),
+        }));
+        return sampleSocialSuggestions(competitor?.website ?? "competitor.com");
+      },
+      async previewCompetitorSocials(input) {
+        return sampleSocialSuggestions(input.url);
       },
       async addClient(input) {
         const now = new Date().toISOString();
@@ -702,7 +949,10 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
         }));
       },
     }),
-    [patchData],
+    // `data` is a dependency because discovery reads the competitor's own stored
+    // website rather than taking it from the caller, so the proposal cannot drift
+    // from what is on screen.
+    [data, patchData],
   );
 
   const value = useMemo<WorkspaceContextValue>(
@@ -787,10 +1037,10 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const withBusiness = useCallback(
-    async (run: (profile: BusinessProfile) => Promise<void>) => {
-      if (!profile) return;
+    async <T,>(run: (profile: BusinessProfile) => Promise<T>): Promise<T | undefined> => {
+      if (!profile) return undefined;
       try {
-        await run(profile);
+        return await run(profile);
       } catch (cause) {
         // Resync first — the optimistic patch that ran before this write is now
         // wrong — then record the failure (bootstrap resets the error state) and
@@ -862,6 +1112,107 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
             });
             patchData((current) => ({ ...current, scanRuns: [run, ...current.scanRuns] }));
           });
+        }
+      },
+      async addCompetitor(input) {
+        // Without a database (signed in, keys absent) the sample workspace is
+        // what is on screen, so the write happens against it — the same thing the
+        // demo provider does — instead of silently doing nothing.
+        const created = dbEnabled
+          ? await withBusiness((business) => createCompetitorRow(business.id, input))
+          : demoCompetitor(input);
+        if (!created) throw new Error("Your workspace is still loading — try again.");
+        patchData((current) => ({ ...current, competitors: [...current.competitors, created] }));
+        return created;
+      },
+      async updateCompetitor(competitorId, patch) {
+        patchData((current) => ({
+          ...current,
+          competitors: current.competitors.map((c) =>
+            c.id === competitorId ? { ...c, ...patch } : c,
+          ),
+        }));
+        if (dbEnabled) await withBusiness(() => updateCompetitorRow(competitorId, patch));
+      },
+      async removeCompetitor(competitorId) {
+        // Drop the dependent rows locally too, so nothing is left rendering for a
+        // competitor that no longer exists — which is what the cascade does for real.
+        patchData((current) => withoutCompetitor(current, competitorId));
+        if (dbEnabled) await withBusiness(() => deleteCompetitorRow(competitorId));
+      },
+      async addSupplier(input) {
+        const created = dbEnabled
+          ? await withBusiness((business) => createSupplierRow(business.id, input))
+          : demoSupplier(input);
+        if (!created) throw new Error("Your workspace is still loading — try again.");
+        patchData((current) => ({ ...current, suppliers: [...current.suppliers, created] }));
+        return created;
+      },
+      async updateSupplier(supplierId, patch) {
+        patchData((current) => ({
+          ...current,
+          suppliers: current.suppliers.map((s) =>
+            s.id === supplierId
+              ? {
+                  ...s,
+                  ...patch,
+                  nextScan: patch.cadence !== undefined ? nextScanFrom(patch.cadence) : s.nextScan,
+                }
+              : s,
+          ),
+        }));
+        if (dbEnabled) await withBusiness(() => updateSupplierRow(supplierId, patch));
+      },
+      async removeSupplier(supplierId) {
+        patchData((current) => withoutSupplier(current, supplierId));
+        if (dbEnabled) await withBusiness(() => deleteSupplierRow(supplierId));
+      },
+      async saveCompetitorSocials(input) {
+        if (!dbEnabled) {
+          const channels = demoSocialChannels(input.handles, input.source ?? "manual");
+          patchData((current) => ({
+            ...current,
+            competitors: withSocialChannels(current.competitors, input.competitorId, channels),
+          }));
+          return;
+        }
+        await withBusiness(async (business) => {
+          const saved = await saveCompetitorSocialHandles(business.id, input);
+          patchData((current) => ({
+            ...current,
+            competitors: withSocialChannels(current.competitors, input.competitorId, saved),
+          }));
+        });
+      },
+      async findCompetitorSocials(input) {
+        if (!dbEnabled || !profile) return null;
+        try {
+          // Stored mode: the gateway reads the competitor's stored website and
+          // records what the run is doing on the row. Accepting a proposal is a
+          // separate, explicit `saveCompetitorSocials` call.
+          const result = await invokeGateway<ContactDiscoveryResult>("web-contacts-scan", {
+            businessId: profile.id,
+            competitorId: input.competitorId,
+          });
+          await bootstrap();
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Their website could not be read.");
+          throw cause;
+        }
+      },
+      async previewCompetitorSocials(input) {
+        if (!dbEnabled) return null;
+        try {
+          // Called from onboarding, before the business row exists — so there is
+          // no tenant to scope the run to and nothing to write its state onto.
+          return await invokeGateway<ContactDiscoveryResult>("web-contacts-scan", {
+            url: input.url,
+            label: input.label,
+          });
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Their website could not be read.");
+          throw cause;
         }
       },
       async addClient(input) {

@@ -1,8 +1,9 @@
-import { daysAgo, daysAhead } from "../lib/format";
+import { daysAgo, daysAhead, domainFromUrl } from "../lib/format";
 import type {
   AdAngle,
   AdAsset,
   CompetitorReviewGap,
+  ContactDiscoveryResult,
   GeoRankRow,
   InventoryRecommendation,
   KeywordCluster,
@@ -471,6 +472,54 @@ export function sampleAdAngles(): AdAngle[] {
       itemHint: "Velvet Matte Lip Kit",
     },
   ];
+}
+
+/**
+ * The demo stand-in for a website contacts scan.
+ *
+ * Derived from the site's own domain, so the same competitor always proposes the
+ * same profiles and the accept flow is a real flow rather than a stub — and it
+ * deliberately includes one platform we cannot monitor, so the "found, not
+ * monitored" path is exercised in demo mode too.
+ *
+ * Demo mode never calls the gateway: there is no key, no actor and no spend.
+ */
+export function sampleSocialSuggestions(website: string): ContactDiscoveryResult {
+  const domain = domainFromUrl(website) || "competitor.com";
+  const brand = domain.split(".")[0].replace(/[^a-z0-9]/gi, "").toLowerCase() || "competitor";
+
+  return {
+    status: "done",
+    scannedUrl: domain,
+    costUsd: 0,
+    unmonitored: ["YouTube"],
+    suggestions: [
+      {
+        platform: "instagram",
+        handle: brand,
+        url: `https://www.instagram.com/${brand}/`,
+        monitorable: true,
+      },
+      {
+        platform: "facebook",
+        handle: brand,
+        url: `https://www.facebook.com/${brand}/`,
+        monitorable: true,
+      },
+      {
+        platform: "tiktok",
+        handle: `${brand}official`,
+        url: `https://www.tiktok.com/@${brand}official`,
+        monitorable: true,
+      },
+      {
+        platform: "youtube",
+        handle: brand,
+        url: `https://www.youtube.com/@${brand}`,
+        monitorable: false,
+      },
+    ],
+  };
 }
 
 /**

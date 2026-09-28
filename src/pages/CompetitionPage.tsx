@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
 import {
   Binoculars,
+  Check,
   Download,
   ExternalLink,
   Globe2,
   Image as ImageIcon,
+  Loader2,
   MapPin,
   Megaphone,
   MessageSquareQuote,
   Package,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -23,6 +26,7 @@ import {
   Badge,
   Card,
   CardHead,
+  ConfirmButton,
   EmptyState,
   Field,
   Notice,
@@ -37,13 +41,36 @@ import {
   inputClass,
 } from "../components/primitives";
 import { Modal } from "../components/Modal";
+import { SocialSuggestions, useSuggestionChoices } from "../components/SocialSuggestions";
 import { AreaChart, BarList, DeltaPill, Stars } from "../components/charts";
 import { StatusStatGrid, type StatStatus } from "../components/insights";
 import { useActionToast, useToast } from "../components/Toast";
-import { compact, daysAgo, money, relativeTime, shortDate, titleCase } from "../lib/format";
-import { SOCIAL_PLATFORMS, isRecentPost, platformLabel, summariseSocial } from "../lib/social";
+import {
+  compact,
+  daysAgo,
+  money,
+  normaliseWebsite,
+  relativeTime,
+  shortDate,
+  titleCase,
+} from "../lib/format";
+import {
+  SOCIAL_PLATFORMS,
+  isRecentPost,
+  normaliseSocialHandle,
+  platformLabel,
+  summariseSocial,
+} from "../lib/social";
 import { useWorkspace, useWorkspaceData, type PromotionBriefInput } from "../lib/workspace";
-import type { AdAngle, Cadence, KeywordGap, PromotionComponent } from "../lib/types";
+import type {
+  AdAngle,
+  Cadence,
+  Competitor,
+  CompetitorInput,
+  ContactDiscoveryResult,
+  KeywordGap,
+  PromotionComponent,
+} from "../lib/types";
 
 type CompetitionTab =
   | "overview"
@@ -71,6 +98,35 @@ const KEYWORD_TABS: { value: KeywordFilter; label: string }[] = [
 function opportunity(k: KeywordGap) {
   const gap = k.ourRank === null ? 100 : k.ourRank - k.theirRank;
   return Math.round((k.volume / 1000) * Math.max(0, gap) * (1 - k.difficulty / 130));
+}
+
+/**
+ * What removing a competitor takes with it, counted from what is on screen.
+ *
+ * The database cascades every child table, so this is not a warning about the
+ * obvious row — it is the work that disappears with it, named before the user
+ * confirms. Nothing here is a number we cannot see.
+ */
+function competitorRemovalNote(competitor: Competitor, posts: number): string {
+  const parts = [
+    competitor.social.length
+      ? `${competitor.social.length} monitored social profile${competitor.social.length === 1 ? "" : "s"}`
+      : "",
+    competitor.newItems.length
+      ? `${competitor.newItems.length} detected product${competitor.newItems.length === 1 ? "" : "s"}`
+      : "",
+    competitor.keywordGap.length
+      ? `${competitor.keywordGap.length} tracked keyword${competitor.keywordGap.length === 1 ? "" : "s"}`
+      : "",
+    posts ? `${posts} scraped post${posts === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+
+  if (!parts.length) {
+    return "Nothing else is stored against them yet, so only the competitor goes. This cannot be undone.";
+  }
+  const list =
+    parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `Removing them also deletes ${list}. Nothing is kept, and this cannot be undone.`;
 }
 
 export function CompetitionPage() {
@@ -110,6 +166,30 @@ export function CompetitionPage() {
   const [draftingAngles, setDraftingAngles] = useState(false);
   const [creatingBrief, setCreatingBrief] = useState(false);
 
+  /** The add/edit form: closed, adding a competitor, or editing the active one. */
+  const [formMode, setFormMode] = useState<"add" | "edit" | null>(null);
+  const [form, setForm] = useState<CompetitorInput>({
+    name: "",
+    website: "",
+    cadence: "daily",
+    notes: "",
+  });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+
+  /** The website read for the active competitor, and the review of what it found. */
+  const [discovery, setDiscovery] = useState<ContactDiscoveryResult | null>(null);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryNote, setDiscoveryNote] = useState<string | null>(null);
+  const {
+    choices: discoveryChoices,
+    toggle: toggleChoice,
+    edit: editChoice,
+    accepted,
+  } = useSuggestionChoices(discovery);
+
   const competitor = competitors.find((c) => c.id === activeId) ?? competitors[0];
   const cadence = competitor?.cadence ?? "daily";
 
@@ -123,19 +203,112 @@ export function CompetitionPage() {
     });
   }, [competitor, keywordFilter]);
 
+  /**
+   * The add/edit form, built once and rendered by both branches of the page. The
+   * empty state has to be able to add the first competitor, or it is a dead end.
+   */
+  const competitorForm = (
+    <Modal
+      open={formMode !== null}
+      onClose={() => setFormMode(null)}
+      title={formMode === "edit" ? "Edit competitor" : "Add a competitor"}
+      subtitle={
+        formMode === "edit"
+          ? "Changes apply from the next scan — what we have already measured stays attached."
+          : "We compare their traffic, keywords, ads, socials and reviews against yours."
+      }
+      icon={<Binoculars size={16} />}
+      footer={
+        <>
+          <button type="button" className={btnGhost} onClick={() => setFormMode(null)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={btnPrimary}
+            disabled={saving}
+            onClick={() => void submitCompetitor()}
+          >
+            {formMode === "edit" ? <Check size={13} /> : <Plus size={13} />}
+            {formMode === "edit" ? "Save changes" : "Add competitor"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-4 px-4 py-4">
+        <Field label="Name">
+          <input
+            className={inputClass}
+            placeholder="e.g. GlowMart Beauty"
+            value={form.name}
+            onChange={(event) => setForm({ ...form, name: event.target.value })}
+          />
+        </Field>
+        <Field label="Website" hint="Their own site. A pasted URL is reduced to its domain.">
+          <input
+            className={inputClass}
+            placeholder="glowmart.com"
+            value={form.website}
+            onChange={(event) => setForm({ ...form, website: event.target.value })}
+          />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Check cadence">
+            <select
+              className={inputClass}
+              value={form.cadence}
+              onChange={(event) =>
+                setForm({ ...form, cadence: event.target.value as CompetitorInput["cadence"] })
+              }
+            >
+              {CADENCE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Notes" hint="For you and your team — never sent anywhere.">
+            <input
+              className={inputClass}
+              placeholder="Anything worth remembering"
+              value={form.notes ?? ""}
+              onChange={(event) => setForm({ ...form, notes: event.target.value })}
+            />
+          </Field>
+        </div>
+        {formMode === "edit" ? (
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Changing the website does not wipe their history: existing scans, posts and reviews stay
+            attached to this competitor.
+          </p>
+        ) : null}
+        {formError ? <p className="text-[11px] text-amber-600">{formError}</p> : null}
+      </div>
+    </Modal>
+  );
+
   if (!competitor) {
     return (
-      <Card>
-        <CardHead
-          icon={<Binoculars size={16} />}
-          title="No competitors yet"
-          subtitle="Add the businesses you track and we will compare their traffic, keywords, ads, socials and reviews against yours"
-        />
-        <EmptyState
-          title="Nothing is being monitored"
-          hint="Add competitor websites from your business settings, then come back once the first scan completes."
-        />
-      </Card>
+      <div className="space-y-5">
+        <Card>
+          <CardHead
+            icon={<Binoculars size={16} />}
+            title="No competitors yet"
+            subtitle="Add the businesses you track and we will compare their traffic, keywords, ads, socials and reviews against yours"
+            action={
+              <button type="button" className={btnPrimary} onClick={openAddCompetitor}>
+                <Plus size={13} /> Add competitor
+              </button>
+            }
+          />
+          <EmptyState
+            title="Nothing is being monitored"
+            hint="Add a competitor's website and we will start comparing them from the first scan."
+          />
+        </Card>
+        {competitorForm}
+      </div>
     );
   }
 
@@ -205,6 +378,157 @@ export function CompetitionPage() {
     );
     setHandleOpen(false);
     setHandleValue("");
+  }
+
+  /** Opens the form on a blank competitor, starting from the cadence in view. */
+  function openAddCompetitor() {
+    setForm({ name: "", website: "", cadence, notes: "" });
+    setFormError(null);
+    setFormMode("add");
+  }
+
+  function openEditCompetitor() {
+    if (!competitor) return;
+    setForm({
+      name: competitor.name,
+      website: competitor.website,
+      cadence: competitor.cadence,
+      notes: competitor.notes ?? "",
+    });
+    setFormError(null);
+    setFormMode("edit");
+  }
+
+  /**
+   * Saves the add/edit form.
+   *
+   * A failure keeps the dialog open with what was typed and the reason inline. A
+   * closed dialog plus an error toast loses the input and reads like a success.
+   */
+  async function submitCompetitor() {
+    const name = form.name.trim();
+    const website = normaliseWebsite(form.website);
+    if (!name || !website) {
+      setFormError("Add a name and a website address — that is what gets scanned.");
+      return;
+    }
+
+    setSaving(true);
+    setFormError(null);
+    try {
+      if (formMode === "edit" && competitor) {
+        await actions.updateCompetitor(competitor.id, {
+          name,
+          website,
+          cadence: form.cadence,
+          notes: form.notes,
+        });
+        toast(`${name} updated — the next scan uses the new details.`);
+      } else {
+        const created = await actions.addCompetitor({
+          name,
+          website,
+          cadence: form.cadence,
+          notes: form.notes,
+        });
+        // Show the new row straight away rather than leaving the page on someone else.
+        setActiveId(created.id);
+        setTab("overview");
+        toast(`${created.name} is now being watched.`);
+      }
+      setFormMode(null);
+    } catch (cause) {
+      setFormError(cause instanceof Error ? cause.message : "That competitor could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Reads the active competitor's own website and proposes the profiles on it.
+   *
+   * Stored mode: the gateway reads `competitors.website` and records what the run
+   * is doing on the row. Nothing is written to `competitor_social` — accepting a
+   * proposal is the separate save below, which is the whole point of the split.
+   * A run still working is reported as such rather than as an empty result.
+   */
+  async function findSocials() {
+    if (!competitor) return;
+    const target = competitor;
+
+    setDiscoveryBusy(true);
+    setDiscoveryNote(null);
+    try {
+      const result = await actions.findCompetitorSocials({ competitorId: target.id });
+      if (!result) {
+        setDiscoveryNote("Discovery is not available in this mode — add their handles by hand.");
+        return;
+      }
+      if (result.status === "unavailable") {
+        setDiscoveryNote(result.reason ?? "Discovery is not configured on this deployment.");
+        return;
+      }
+      if (result.status === "running") {
+        setDiscoveryNote(
+          "Their site is still being read. Try again in a moment — the same run is collected, not a new one.",
+        );
+        return;
+      }
+      if (result.status === "failed") {
+        setDiscoveryNote(result.reason ?? "Their website could not be read.");
+        return;
+      }
+      setDiscovery(result);
+    } catch (cause) {
+      setDiscoveryNote(cause instanceof Error ? cause.message : "Their website could not be read.");
+    } finally {
+      setDiscoveryBusy(false);
+    }
+  }
+
+  /** Saves the ticked proposals, each with the provenance the review gave it. */
+  async function saveFound() {
+    if (!competitor) return;
+    const target = competitor;
+    const handles = accepted
+      .map((row) => ({ ...row, handle: normaliseSocialHandle(row.handle) }))
+      .filter((row) => row.handle);
+    if (!handles.length) {
+      setDiscoveryNote("That handle does not look like a profile — check it and try again.");
+      return;
+    }
+
+    try {
+      await actions.saveCompetitorSocials({ competitorId: target.id, handles });
+      toast(
+        `Saved ${handles.length} discovered profile${handles.length === 1 ? "" : "s"} for ${target.name}.`,
+      );
+      setDiscovery(null);
+      setDiscoveryNote(null);
+    } catch (cause) {
+      setDiscoveryNote(cause instanceof Error ? cause.message : "Those profiles could not be saved.");
+    }
+  }
+
+  /** Removes the active competitor, then moves the page to whoever is left. */
+  async function removeCompetitor() {
+    if (!competitor) return;
+    const target = competitor;
+    const index = competitors.findIndex((c) => c.id === target.id);
+    const next = competitors[index + 1] ?? competitors[index - 1] ?? null;
+
+    setRemoving(true);
+    try {
+      await actions.removeCompetitor(target.id);
+      // Re-point before the re-render: `activeId` still names a row that is gone.
+      setActiveId(next?.id ?? "");
+      setConfirmRemove(false);
+      toast(`Stopped watching ${target.name} and cleared what we held on them.`);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "That competitor could not be removed.");
+    } finally {
+      setRemoving(false);
+    }
   }
 
   async function scanSocial() {
@@ -340,6 +664,10 @@ export function CompetitionPage() {
             </button>
           ))}
 
+          <button type="button" className={btnGhost} onClick={openAddCompetitor}>
+            <Plus size={13} /> Add competitor
+          </button>
+
           <span className="ml-auto flex flex-wrap items-center gap-2">
             <span className="text-[11px] text-slate-500">Scan cadence</span>
             <Segmented
@@ -353,6 +681,12 @@ export function CompetitionPage() {
                 });
               }}
             />
+            <button type="button" className={btnGhost} onClick={openEditCompetitor}>
+              <Pencil size={13} /> Edit
+            </button>
+            <button type="button" className={btnGhost} onClick={() => setConfirmRemove(true)}>
+              <Trash2 size={13} /> Remove
+            </button>
             <button
               type="button"
               className={btnGhost}
@@ -1200,18 +1534,77 @@ export function CompetitionPage() {
             title="Social presence"
             subtitle="Where they publish and how much they engage"
             action={
-              <button
-                type="button"
-                className={btnGhost}
-                onClick={() => {
-                  setHandleValue("");
-                  setHandleOpen(true);
-                }}
-              >
-                <Plus size={13} /> Add handle
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={btnGhost}
+                  disabled={discoveryBusy || competitor.contactsStatus === "running"}
+                  onClick={() => void findSocials()}
+                >
+                  {discoveryBusy || competitor.contactsStatus === "running" ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Globe2 size={13} />
+                  )}
+                  {discoveryBusy || competitor.contactsStatus === "running"
+                    ? "Checking their site…"
+                    : "Find socials from their site"}
+                </button>
+                <button
+                  type="button"
+                  className={btnGhost}
+                  onClick={() => {
+                    setHandleValue("");
+                    setHandleOpen(true);
+                  }}
+                >
+                  <Plus size={13} /> Add handle
+                </button>
+              </>
             }
           />
+
+          {/* What the last read of their site did, and the review of what it found.
+              A finding is never applied on its own. */}
+          {discovery || discoveryNote || competitor.contactsScannedAt ? (
+            <div className="space-y-2.5 border-b border-slate-100 px-4 py-3">
+              {discovery ? (
+                <>
+                  <SocialSuggestions
+                    result={discovery}
+                    choices={discoveryChoices}
+                    onToggle={toggleChoice}
+                    onEdit={editChoice}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      disabled={!accepted.length}
+                      onClick={() => void saveFound()}
+                    >
+                      <Plus size={13} /> Save {accepted.length} profile
+                      {accepted.length === 1 ? "" : "s"}
+                    </button>
+                    <button type="button" className={btnGhost} onClick={() => setDiscovery(null)}>
+                      Discard
+                    </button>
+                  </div>
+                </>
+              ) : competitor.contactsScannedAt ? (
+                <p className="text-[11px] text-slate-500">
+                  Last checked {relativeTime(competitor.contactsScannedAt)}.
+                  {competitor.social.length
+                    ? ""
+                    : " Nothing we can monitor was found on their site — add their handles by hand."}
+                </p>
+              ) : null}
+              {discoveryNote ? (
+                <p className="text-[11px] text-amber-600">{discoveryNote}</p>
+              ) : null}
+            </div>
+          ) : null}
+
           {competitor.social.length === 0 ? (
             <EmptyState
               title="No social channels monitored yet"
@@ -1222,8 +1615,11 @@ export function CompetitionPage() {
               {competitor.social.map((s) => (
                 <li key={s.platform} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-slate-900">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
                       {platformLabel(s.platform)}
+                      {s.source === "discovered" ? (
+                        <Badge tone="info">found on their site</Badge>
+                      ) : null}
                     </span>
                     <span className="flex min-w-0 items-center gap-1">
                       <span className="truncate text-xs text-slate-500">{s.handle}</span>
@@ -1387,6 +1783,45 @@ export function CompetitionPage() {
           </Field>
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
             Their posts are treated as a market signal — never republished as your own creative.
+          </p>
+        </div>
+      </Modal>
+
+      {competitorForm}
+
+      {/* ------------------------------------------------ stop watching a competitor */}
+      <Modal
+        open={confirmRemove}
+        onClose={() => setConfirmRemove(false)}
+        title={`Stop watching ${competitor.name}?`}
+        subtitle="Their row goes, and everything measured from it goes with it"
+        icon={<Trash2 size={16} />}
+        footer={
+          <>
+            <button
+              type="button"
+              className={btnGhost}
+              disabled={removing}
+              onClick={() => setConfirmRemove(false)}
+            >
+              Keep watching
+            </button>
+            <ConfirmButton
+              label="Remove competitor"
+              confirmLabel="Delete permanently"
+              icon={<Trash2 size={13} />}
+              busy={removing}
+              onConfirm={() => void removeCompetitor()}
+            />
+          </>
+        }
+      >
+        <div className="space-y-3 px-4 py-4">
+          <p className="text-sm text-slate-700">
+            {competitor.name} stops being compared on this page and its card disappears.
+          </p>
+          <p className="rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-2 text-[12px] text-rose-900">
+            {competitorRemovalNote(competitor, theirPosts.length)}
           </p>
         </div>
       </Modal>

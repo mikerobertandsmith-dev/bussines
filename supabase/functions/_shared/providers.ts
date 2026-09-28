@@ -21,6 +21,40 @@ export const PROVIDER_ENV_KEYS: Record<IntegrationProvider, string[]> = {
 
 export const PROVIDERS = Object.keys(PROVIDER_ENV_KEYS) as IntegrationProvider[];
 
+/**
+ * Capabilities a provider can serve that are switched off by a *second*,
+ * independent secret.
+ *
+ * These are not credential requirements: Apify works for social monitoring with
+ * `APIFY_TOKEN` alone, and folding the contacts actor id into its required keys
+ * would report the whole provider as broken when only one feature is off. Naming
+ * the feature instead is what makes "discovery is not configured" readable as a
+ * configuration state rather than a fault.
+ */
+export const PROVIDER_INACTIVE_FEATURES: Partial<
+  Record<IntegrationProvider, { label: string; envKey: string }[]>
+> = {
+  apify: [
+    {
+      label: "Website social discovery",
+      envKey: "APIFY_CONTACTS_ACTOR_ID",
+    },
+  ],
+};
+
+/**
+ * Ready-to-render copy for each of a provider's features that is off.
+ * Empty for a provider that has none, and for one whose features are all on.
+ */
+export function inactiveFeaturesFor(
+  provider: IntegrationProvider,
+  has: (key: string) => boolean,
+): string[] {
+  return (PROVIDER_INACTIVE_FEATURES[provider] ?? [])
+    .filter((feature) => !has(feature.envKey))
+    .map((feature) => `${feature.label} is off — add ${feature.envKey} to switch it on.`);
+}
+
 /** A provider is usable once every one of its env keys is present. */
 export function providerConfigured(
   provider: IntegrationProvider,

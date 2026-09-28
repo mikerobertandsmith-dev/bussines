@@ -6,6 +6,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChevronDown,
   Globe2,
   Loader2,
   Mail,
@@ -29,6 +30,7 @@ import {
   inputClass,
 } from "../components/primitives";
 import { LogoUpload } from "../components/LogoUpload";
+import { SocialSuggestions, useSuggestionChoices } from "../components/SocialSuggestions";
 import { useWorkspace } from "../lib/workspace";
 import {
   AD_PLATFORMS,
@@ -42,10 +44,17 @@ import {
   TEAM_SIZES,
   detectedTimezone,
 } from "../lib/options";
-import { titleCase } from "../lib/format";
+import { normaliseWebsite, titleCase } from "../lib/format";
+import {
+  // The keys the gateway scrapes against, not the display labels in `../lib/options`.
+  SOCIAL_PLATFORMS as SOCIAL_PLATFORM_KEYS,
+  normaliseSocialHandle,
+  platformLabel,
+} from "../lib/social";
 import type {
   Cadence,
   ClientSeedInput,
+  ContactDiscoveryResult,
   MonitoringSourceInput,
   OnboardingInput,
   SendFrequency,
@@ -105,9 +114,38 @@ export function OnboardingPage() {
 
   const patch = (changes: Partial<OnboardingInput>) => setForm((prev) => ({ ...prev, ...changes }));
 
+  /**
+   * The competitor social section: which card is expanded, and the handle being
+   * typed into it. One open at a time and one draft, because the section is an
+   * accordion — this is already the longest step in the wizard, and it has to stay
+   * scannable at the moment the user least wants a wall of inputs.
+   */
+  const [socialsOpenFor, setSocialsOpenFor] = useState<number | null>(null);
+  const [socialDraft, setSocialDraft] = useState<{ platform: string; handle: string }>({
+    platform: SOCIAL_PLATFORM_KEYS[0],
+    handle: "",
+  });
+  const [socialError, setSocialError] = useState<string | null>(null);
+
+  /** The same accordion, for reading a competitor's own site instead of typing. */
+  const [discoveryOpenFor, setDiscoveryOpenFor] = useState<number | null>(null);
+  const [discovery, setDiscovery] = useState<ContactDiscoveryResult | null>(null);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryNote, setDiscoveryNote] = useState<string | null>(null);
+  const {
+    choices: discoveryChoices,
+    toggle: toggleChoice,
+    edit: editChoice,
+    accepted,
+  } = useSuggestionChoices(discovery);
+
   const filledSuppliers = form.suppliers.filter((s) => s.name.trim() || s.website.trim());
   const filledCompetitors = form.competitors.filter((c) => c.name.trim() || c.website.trim());
   const filledClients = form.seedClients.filter((c) => c.email.trim());
+  const recordedSocials = filledCompetitors.reduce(
+    (total, c) => total + (c.socials?.length ?? 0),
+    0,
+  );
 
   const stepError = useMemo(() => {
     if (step === 0 && !form.brandName.trim()) return "Enter your business name to continue.";
@@ -116,8 +154,15 @@ export function OnboardingPage() {
       return "Add at least one supplier site so we know what to monitor.";
     if (step === 2 && filledSuppliers.some((s) => !s.website.trim()))
       return "Every supplier needs a website address.";
+    // Checked here rather than after normalising, at submit: a domain that cannot
+    // be read as one is caught while the user is still on the step, instead of
+    // being stored as an empty website no scan can open.
+    if (step === 2 && filledSuppliers.some((s) => !normaliseWebsite(s.website)))
+      return "That supplier website does not look like a web address — try supplier.com.";
     if (step === 3 && filledCompetitors.some((c) => !c.website.trim()))
       return "Every competitor needs a website address.";
+    if (step === 3 && filledCompetitors.some((c) => !normaliseWebsite(c.website)))
+      return "That competitor website does not look like a web address — try rival.com.";
     if (step === 4 && form.clientMessageTypes.length === 0)
       return "Choose at least one kind of message your clients receive.";
     return null;
@@ -142,6 +187,122 @@ export function OnboardingPage() {
   function removeSource(key: "suppliers" | "competitors", index: number) {
     const next = form[key].filter((_, i) => i !== index);
     patch({ [key]: next.length ? next : [emptySource(form.supplierCadence)] } as Partial<OnboardingInput>);
+  }
+
+  function toggleSocials(index: number) {
+    setSocialsOpenFor((open) => (open === index ? null : index));
+    setSocialError(null);
+    setSocialDraft({ platform: SOCIAL_PLATFORM_KEYS[0], handle: "" });
+  }
+
+  /**
+   * Records the typed handle against one competitor.
+   *
+   * The handle is reduced to the bare username first — the same rule the
+   * Competition page enforces, and the reason a pasted profile URL does not end up
+   * embedded inside the URL the scraper builds, which would quietly return nothing.
+   *
+   * Adding a platform that is already recorded replaces it instead of erroring,
+   * which is what both the unique index and `mergeSocialChannel` do: one handle per
+   * platform is the model, so a duplicate is a correction, not a mistake.
+   */
+  function addSocial(index: number) {
+    const handle = normaliseSocialHandle(socialDraft.handle);
+    if (!handle) {
+      setSocialError("Add their handle or paste the profile URL — e.g. @glowmartbeauty.");
+      return;
+    }
+
+    const existing = form.competitors[index]?.socials ?? [];
+    updateSource("competitors", index, {
+      socials: [
+        ...existing.filter((row) => row.platform !== socialDraft.platform),
+        { platform: socialDraft.platform, handle },
+      ],
+    });
+    setSocialDraft({ platform: socialDraft.platform, handle: "" });
+    setSocialError(null);
+  }
+
+  function toggleDiscovery(index: number) {
+    setDiscoveryOpenFor((open) => (open === index ? null : index));
+    setDiscoveryNote(null);
+    setDiscovery(null);
+  }
+
+  /**
+   * Asks the gateway to read one competitor's website.
+   *
+   * Preview mode, because this runs before the competitor row exists. It authors
+   * nothing: the proposals come back here and only a human accepting them writes
+   * anything, which is what stops a footer link to the site's web agency becoming
+   * a billed scrape target.
+   */
+  async function findSocials(index: number) {
+    const website = normaliseWebsite(form.competitors[index]?.website ?? "");
+    if (!website) {
+      setDiscoveryNote("Add their website first — that is what gets read.");
+      return;
+    }
+
+    setDiscoveryBusy(true);
+    setDiscoveryNote(null);
+    try {
+      const result = await actions.previewCompetitorSocials({
+        url: website,
+        label: form.competitors[index]?.name,
+      });
+
+      if (!result) {
+        setDiscoveryNote("Discovery is not available in this mode — add their handles by hand.");
+        return;
+      }
+      if (result.status === "unavailable") {
+        setDiscoveryNote(result.reason ?? "Discovery is not configured on this deployment.");
+        return;
+      }
+      if (result.status === "running") {
+        setDiscoveryNote(
+          "Their site is still being read. Check again in a moment — the same run is picked up, not a new one.",
+        );
+        return;
+      }
+      if (result.status === "failed") {
+        setDiscoveryNote(result.reason ?? "Their website could not be read.");
+        return;
+      }
+      setDiscovery(result);
+    } catch (cause) {
+      setDiscoveryNote(cause instanceof Error ? cause.message : "Their website could not be read.");
+    } finally {
+      setDiscoveryBusy(false);
+    }
+  }
+
+  /** Adds the ticked proposals to this competitor, replacing any platform already held. */
+  function acceptFound(index: number) {
+    const handles = accepted
+      .map((row) => ({ ...row, handle: normaliseSocialHandle(row.handle) }))
+      .filter((row) => row.handle);
+    if (!handles.length) {
+      setDiscoveryNote("That handle does not look like a profile — check it and try again.");
+      return;
+    }
+
+    const platforms = new Set(handles.map((row) => row.platform));
+    const existing = form.competitors[index]?.socials ?? [];
+    updateSource("competitors", index, {
+      socials: [...existing.filter((row) => !platforms.has(row.platform)), ...handles],
+    });
+    setDiscovery(null);
+    setDiscoveryNote(null);
+  }
+
+  function removeSocial(index: number, platform: string) {
+    const existing = form.competitors[index]?.socials ?? [];
+    updateSource("competitors", index, {
+      socials: existing.filter((row) => row.platform !== platform),
+    });
   }
 
   function updateSeedClient(index: number, changes: Partial<ClientSeedInput>) {
@@ -170,8 +331,12 @@ export function OnboardingPage() {
         ...form,
         notificationEmail: form.notificationEmail || email,
         loginEmail: form.loginEmail || email,
-        suppliers: filledSuppliers,
-        competitors: filledCompetitors,
+        // One normaliser for the whole app, so a site typed as "supplier.com" is
+        // stored as the same URL the add/edit forms would store. Without it, the
+        // same supplier can arrive twice under two spellings, and a scrape built
+        // from a bare host is not a URL at all.
+        suppliers: filledSuppliers.map((s) => ({ ...s, website: normaliseWebsite(s.website) })),
+        competitors: filledCompetitors.map((c) => ({ ...c, website: normaliseWebsite(c.website) })),
         seedClients: filledClients,
       });
       // Uploaded after the business row exists, because the file is stored
@@ -528,41 +693,222 @@ export function OnboardingPage() {
                   subtitle="We compare their traffic, keywords, ads, socials and customer reviews against yours"
                 />
                 <div className="space-y-3 px-4 py-4">
-                  {form.competitors.map((source, index) => (
-                    <div
-                      key={`competitor-${index}`}
-                      className="grid gap-3 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1.4fr_auto]"
-                    >
-                      <Field label="Competitor name">
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. GlowMart Beauty"
-                          value={source.name}
-                          onChange={(e) => updateSource("competitors", index, { name: e.target.value })}
-                        />
-                      </Field>
-                      <Field label="Website">
-                        <input
-                          className={inputClass}
-                          placeholder="https://competitor.com"
-                          value={source.website}
-                          onChange={(e) =>
-                            updateSource("competitors", index, { website: e.target.value })
-                          }
-                        />
-                      </Field>
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          onClick={() => removeSource("competitors", index)}
-                          className="rounded-lg border border-slate-300 p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
-                          aria-label="Remove competitor"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                  {form.competitors.map((source, index) => {
+                    const socials = source.socials ?? [];
+                    const open = socialsOpenFor === index;
+                    return (
+                      <div
+                        key={`competitor-${index}`}
+                        className="rounded-xl border border-slate-200 p-3"
+                      >
+                        <div className="grid gap-3 sm:grid-cols-[1fr_1.4fr_auto]">
+                          <Field label="Competitor name">
+                            <input
+                              className={inputClass}
+                              placeholder="e.g. GlowMart Beauty"
+                              value={source.name}
+                              onChange={(e) =>
+                                updateSource("competitors", index, { name: e.target.value })
+                              }
+                            />
+                          </Field>
+                          <Field label="Website">
+                            <input
+                              className={inputClass}
+                              placeholder="https://competitor.com"
+                              value={source.website}
+                              onChange={(e) =>
+                                updateSource("competitors", index, { website: e.target.value })
+                              }
+                            />
+                          </Field>
+                          <div className="flex items-end">
+                            <button
+                              type="button"
+                              onClick={() => removeSource("competitors", index)}
+                              className="rounded-lg border border-slate-300 p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
+                              aria-label="Remove competitor"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Collapsed by default: the socials are worth offering
+                            here, next to the website they were read from, but they
+                            must not be what the user has to scroll past. */}
+                        <div className="mt-3 border-t border-slate-100 pt-3">
+                          <button
+                            type="button"
+                            onClick={() => toggleSocials(index)}
+                            aria-expanded={open}
+                            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
+                          >
+                            <ChevronDown
+                              size={13}
+                              className={`transition ${open ? "rotate-180" : ""}`}
+                            />
+                            Add their social profiles
+                            {socials.length ? (
+                              <span className="font-normal text-slate-500">
+                                — {socials.length} recorded
+                              </span>
+                            ) : null}
+                          </button>
+
+                          {open ? (
+                            <div className="mt-2.5 space-y-2.5">
+                              <p className="text-[11px] text-slate-500">
+                                Optional. Their public posts are read as a market signal — never
+                                republished as your own creative.
+                              </p>
+                              <div className="flex flex-wrap items-end gap-2">
+                                <div className="w-40">
+                                  <Field label="Platform">
+                                    <select
+                                      className={inputClass}
+                                      aria-label="Platform"
+                                      value={socialDraft.platform}
+                                      onChange={(e) =>
+                                        setSocialDraft({
+                                          ...socialDraft,
+                                          platform: e.target.value,
+                                        })
+                                      }
+                                    >
+                                      {SOCIAL_PLATFORM_KEYS.map((platform) => (
+                                        <option key={platform} value={platform}>
+                                          {platformLabel(platform)}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </Field>
+                                </div>
+                                <div className="min-w-52 flex-1">
+                                  <Field
+                                    label="Handle or profile URL"
+                                    hint="@brand, brand and a pasted profile URL all save the same handle."
+                                  >
+                                    <input
+                                      className={inputClass}
+                                      placeholder="@glowmartbeauty"
+                                      value={socialDraft.handle}
+                                      onChange={(e) =>
+                                        setSocialDraft({ ...socialDraft, handle: e.target.value })
+                                      }
+                                    />
+                                  </Field>
+                                </div>
+                                <button
+                                  type="button"
+                                  className={btnGhost}
+                                  onClick={() => addSocial(index)}
+                                >
+                                  <Plus size={14} /> Add
+                                </button>
+                              </div>
+
+                              {socialError ? (
+                                <p className="text-[11px] text-amber-600">{socialError}</p>
+                              ) : null}
+
+                              {socials.length ? (
+                                <ul className="space-y-1.5">
+                                  {socials.map((row) => (
+                                    <li
+                                      key={row.platform}
+                                      className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5"
+                                    >
+                                      <span className="text-xs text-slate-700">
+                                        <span className="font-medium">
+                                          {platformLabel(row.platform)}
+                                        </span>
+                                        {" · "}
+                                        {row.handle}
+                                      </span>
+                                      <button
+                                        type="button"
+                                        aria-label={`Remove ${platformLabel(row.platform)} profile`}
+                                        onClick={() => removeSocial(index, row.platform)}
+                                        className="rounded p-1 text-slate-400 transition hover:bg-white hover:text-rose-600"
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+
+                        {/* The second way in, next to the first: read their site and
+                            propose what it finds, rather than typing the handles. */}
+                        <div className="mt-2 border-t border-slate-100 pt-3">
+                          <button
+                            type="button"
+                            onClick={() => toggleDiscovery(index)}
+                            aria-expanded={discoveryOpenFor === index}
+                            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-indigo-600 hover:text-indigo-800"
+                          >
+                            <ChevronDown
+                              size={13}
+                              className={`transition ${
+                                discoveryOpenFor === index ? "rotate-180" : ""
+                              }`}
+                            />
+                            Find them automatically
+                          </button>
+
+                          {discoveryOpenFor === index ? (
+                            <div className="mt-2.5 space-y-2.5">
+                              <p className="text-[11px] text-slate-500">
+                                We read their website and propose the profiles it mentions. You choose
+                                what to keep — nothing is saved from the read alone.
+                              </p>
+                              <button
+                                type="button"
+                                className={btnGhost}
+                                disabled={discoveryBusy}
+                                onClick={() => void findSocials(index)}
+                              >
+                                {discoveryBusy ? (
+                                  <Loader2 size={13} className="animate-spin" />
+                                ) : (
+                                  <Globe2 size={13} />
+                                )}
+                                {discoveryBusy ? "Reading their site…" : "Read their website"}
+                              </button>
+
+                              {discoveryNote ? (
+                                <p className="text-[11px] text-amber-600">{discoveryNote}</p>
+                              ) : null}
+
+                              {discovery ? (
+                                <>
+                                  <SocialSuggestions
+                                    result={discovery}
+                                    choices={discoveryChoices}
+                                    onToggle={toggleChoice}
+                                    onEdit={editChoice}
+                                  />
+                                  <button
+                                    type="button"
+                                    className={btnPrimary}
+                                    disabled={!accepted.length}
+                                    onClick={() => acceptFound(index)}
+                                  >
+                                    <Plus size={14} /> Add {accepted.length} profile
+                                    {accepted.length === 1 ? "" : "s"}
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   <button type="button" className={btnGhost} onClick={() => addSource("competitors")}>
                     <Plus size={14} /> Add another competitor
                   </button>
@@ -788,6 +1134,7 @@ export function OnboardingPage() {
                       { label: "Alerts to", value: form.notificationEmail || email || "—" },
                       { label: "Suppliers monitored", value: `${filledSuppliers.length}` },
                       { label: "Competitors monitored", value: `${filledCompetitors.length}` },
+                      { label: "Social profiles recorded", value: `${recordedSocials}` },
                       { label: "Clients receiving updates", value: `${filledClients.length}` },
                       {
                         label: "Message types",

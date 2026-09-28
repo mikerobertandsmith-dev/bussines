@@ -79,6 +79,7 @@ Clerk JWT); the gateway calls the provider with the secret key and writes result
 | `serp-competitors` | SerpApi | cron + "Run benchmark" (Competition → Local) | `competitor_share_of_voice`, `competitor_review_gap` |
 | `keyword-ideas` | SerpApi | on demand (My Business) | `keyword_ideas` |
 | `social-scan` | Apify | cron + "Scan now" | `social_posts`, `social_post_metrics` |
+| `web-contacts-scan` | Apify (the `contacts` slot, `APIFY_CONTACTS_ACTOR_ID`) | onboarding "Find them automatically" + Competition → Social presence | `competitors.contacts_*` and its own run ledger — **never** `competitor_social`, which it only proposes rows for. See [`docs/SOURCE_MANAGEMENT_BLUEPRINT.md`](SOURCE_MANAGEMENT_BLUEPRINT.md) Phases 3–4 |
 | `reviews-sync` | SerpApi + Apify (the `reviews` slot) | "Scan reviews now" | `my_reviews`, `my_review_sources`, `review_connections` |
 | `review-reply` | Google Business Profile (not connected yet) | user action | `review_replies`, updates `my_reviews.replied` |
 | `publish-ad` | Mallary.ai | "Post ad" button | `social_publish_jobs` |

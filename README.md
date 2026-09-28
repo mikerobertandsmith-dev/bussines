@@ -215,7 +215,7 @@ the result to a tenant-scoped table.
 | Provider | What it powers | Gateway functions |
 | --- | --- | --- |
 | **SerpApi** | Google organic positions per device, the local map 3-pack, Google Business profile health, competitor keyword/Share-of-Voice benchmarks, autocomplete keyword ideas | `serp-scan`, `serp-competitors`, `keyword-ideas` |
-| **Apify** | Competitors' recent public social posts, their engagement and posting cadence | `social-scan` |
+| **Apify** | Competitors' recent public social posts, their engagement and posting cadence; and reading a competitor's own website to *propose* the social profiles it mentions (never applied without an explicit accept) | `social-scan`, `web-contacts-scan` |
 | **Reviews** | Reviews from six platforms, read through the SerpApi and Apify accounts above. Not a vendor of its own — see §3.3 of the blueprint | `reviews-sync`, `review-reply` |
 | **AI drafting** | Reply drafts for your reviews, original ad angles from a competitor's best post, and intent themes for keyword suggestions. **Every draft is a draft** — nothing is sent, posted or created without you | `ai-draft` |
 | **Mallary.ai** | Publishing a finished ad design to your connected social accounts | `publish-ad`, `social-accounts` |
@@ -237,6 +237,13 @@ fits and refuses with a clear message once the allowance is gone. Business setti
 usage** panel (the same numbers the caps enforce) and a **Monitoring health** panel (recent failed
 scans and any connection a provider has rejected), and the Notifications page raises an alert at 80%
 and again at 100%.
+
+Website social discovery needs one more layer, because onboarding reads a competitor's site *before*
+there is a workspace to bill: those preview reads are counted per **signed-in user** (10/hour by
+default) from a service-role-only run ledger, and the spend is attributed to the user's workspace as
+soon as they have one. The same ledger makes a repeat read idempotent — a partial unique index allows
+one live run per competitor, and a read taken in the last couple of minutes is replayed rather than
+paid for again. See `docs/SOURCE_MANAGEMENT_BLUEPRINT.md` Phase 4.
 
 ---
 

@@ -447,6 +447,13 @@ export function Layout({
                       ? `${provider.connections} connection${provider.connections === 1 ? "" : "s"} · ${provider.requests} call${provider.requests === 1 ? "" : "s"} · $${provider.costUsd.toFixed(2)} recorded`
                       : `Add ${provider.envKeys.join(" + ")} to the server, then deploy the gateway functions.`}
                   </p>
+                  {/* A capability this provider is configured for in general but
+                      switched off here — a missing extra secret, not a fault. */}
+                  {provider.inactiveFeatures.map((feature) => (
+                    <p key={feature} className="mt-1 text-[10px] text-amber-600">
+                      {feature}
+                    </p>
+                  ))}
                 </li>
               ))}
             </ul>

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildProviderStatus,
   buildUsageBars,
   buildWorkspaceHealth,
   providerUsage,
@@ -15,6 +16,10 @@ import {
   spendMessage,
 } from "../supabase/functions/_shared/budget";
 import { stableEventId, verifyHmacSignature } from "../supabase/functions/_shared/webhookVerify";
+import {
+  inactiveFeaturesFor,
+  providerConfigured,
+} from "../supabase/functions/_shared/providers";
 import type {
   IntegrationConnection,
   ProviderStatus,
@@ -38,6 +43,7 @@ function status(overrides: Partial<ProviderStatus> & { provider: ProviderStatus[
     label: PROVIDER_LABELS[overrides.provider],
     description: "",
     envKeys: [],
+    inactiveFeatures: [],
     configured: true,
     connections: 0,
     requests: 0,
@@ -273,6 +279,65 @@ describe("workspace health", () => {
       "Your Retail Brand",
     ]);
     expect(health.ok).toBe(false);
+  });
+});
+
+describe("features a configured provider cannot serve", () => {
+  const has = (keys: string[]) => (key: string) => keys.includes(key);
+
+  it("names website discovery when the contacts actor id is missing", () => {
+    // The provider itself is fine — social monitoring works with APIFY_TOKEN
+    // alone — so the gap is reported as one feature being off, not as Apify
+    // being broken. That distinction is the whole reason this list exists.
+    expect(providerConfigured("apify", has(["APIFY_TOKEN"]))).toBe(true);
+    expect(inactiveFeaturesFor("apify", has(["APIFY_TOKEN"]))).toEqual([
+      "Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID to switch it on.",
+    ]);
+  });
+
+  it("says nothing once the actor id is set", () => {
+    expect(inactiveFeaturesFor("apify", has(["APIFY_TOKEN", "APIFY_CONTACTS_ACTOR_ID"]))).toEqual(
+      [],
+    );
+  });
+
+  it("leaves providers with no optional capabilities alone", () => {
+    // Reporting an empty list (rather than nothing at all) is what keeps the
+    // panel's render a straight map with no shape check.
+    for (const provider of ["serpapi", "reviews", "mallary", "llm"] as const) {
+      expect(inactiveFeaturesFor(provider, has([]))).toEqual([]);
+    }
+  });
+
+  it("carries the reason through to the panel's provider list", () => {
+    const [apify] = buildProviderStatus({
+      connections: [],
+      usage: [],
+      config: {
+        apify: {
+          configured: true,
+          cap: 0,
+          capUsd: 5,
+          inactiveFeatures: ["Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID."],
+        },
+      },
+    }).filter((provider) => provider.provider === "apify");
+
+    expect(apify.inactiveFeatures).toEqual([
+      "Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID.",
+    ]);
+  });
+
+  it("treats a server that does not report the list as nothing known to be off", () => {
+    // An older deployment predates this field entirely, and `undefined` in the
+    // UI would crash the render rather than merely showing less.
+    const [apify] = buildProviderStatus({
+      connections: [],
+      usage: [],
+      config: { apify: { configured: true, cap: 0, capUsd: 5 } as never },
+    }).filter((provider) => provider.provider === "apify");
+
+    expect(apify.inactiveFeatures).toEqual([]);
   });
 });
 

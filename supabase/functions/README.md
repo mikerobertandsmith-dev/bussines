@@ -26,6 +26,7 @@ _shared/
   serpapi.ts         SerpApi client, matchers + response types (Phase 1)
   keywords.ts        shared keyword resolution for the SerpApi functions (Phase 1)
   apify.ts           Apify client, platform catalogue + post normaliser (Phase 2)
+  contacts.ts        Apify website-contacts client: actor id, caps, input, normaliser
   reviews.ts         review readers (SerpApi + Apify), normaliser, reply gate (Phase 3)
   mallary.ts         Mallary client: media upload, post creation, job status (Phase 4)
   llm.ts             OpenAI-compatible JSON client for the AI drafting tasks (Phase 5)
@@ -39,6 +40,8 @@ keyword-ideas/
   index.ts           Google Autocomplete suggestions for a seed term (optional intent probes)
 social-scan/
   index.ts           competitors' recent public posts (Apify), spend-capped per run
+web-contacts-scan/
+  index.ts           reads a competitor's own site (Apify) and *proposes* its social profiles
 reviews-sync/
   index.ts           pulls each connected review profile into `my_reviews` (SerpApi/Apify)
 review-reply/
@@ -52,6 +55,11 @@ social-accounts/
 ai-draft/
   index.ts           reply drafts, ad angles and keyword themes — always a draft, never a send
 ```
+
+`web-contacts-scan` is the one function that writes nothing the user did not confirm: it reads a
+competitor's website and hands back a proposal, and the accepted handles are written by the app
+through `src/lib/repo.ts`. Every accepted handle becomes a billed scrape target, and a site's footer
+can just as easily name its web agency, so the writing stays deliberate.
 
 Every provider is wired, and every phase of the blueprint has landed: each provider's allowance is
 enforced here, the browser-side usage/health readouts come from `api_usage_log` and `scan_runs`,
@@ -81,6 +89,14 @@ supabase secrets set \
   APIFY_MAX_CHARGE_USD=0.25 \
   APIFY_MONTHLY_CHARGE_USD=5 \
   APIFY_RUN_TIMEOUT_SECS=300 \
+  APIFY_CONTACTS_ACTOR_ID=vdrmota/contact-info-scraper \
+  APIFY_CONTACTS_MAX_PAGES=5 \
+  APIFY_CONTACTS_MAX_CHARGE_USD=0.5 \
+  APIFY_CONTACTS_MAX_DEPTH=1 \
+  APIFY_CONTACTS_RUN_TIMEOUT_SECS=120 \
+  APIFY_CONTACTS_ENRICH_PROFILES=false \
+  APIFY_CONTACTS_PREVIEW_MAX_PER_HOUR=10 \
+  APIFY_CONTACTS_REUSE_WINDOW_MINUTES=2 \
   APIFY_TRUSTPILOT_REVIEWS_ACTOR_ID=... \
   APIFY_YELP_REVIEWS_ACTOR_ID=... \
   APIFY_G2_REVIEWS_ACTOR_ID=... \
@@ -120,6 +136,23 @@ $0.25 default Apify refuses the run and the platform is reported as skipped. Onl
 `APIFY_MAX_CHARGE_USD` above such an actor's monthly price once that rental is actually affordable —
 that is deliberate, not a bug in the cap.
 
+`APIFY_CONTACTS_ACTOR_ID` switches website social discovery on, and is the only contacts variable
+that has to be set: blank means "not configured on this deployment" — reported as a named feature that
+is off under apify, not as the provider being broken — and the surfaces say so instead of guessing at
+an id. The rest have working defaults.
+
+`APIFY_CONTACTS_PREVIEW_MAX_PER_HOUR` (default 10) bounds the one path with no workspace to bill:
+onboarding runs before the business row exists, so preview reads are counted per **signed-in user**
+from `contacts_discovery_runs` and refused with a `429` past the cap.
+`APIFY_CONTACTS_REUSE_WINDOW_MINUTES` (default 2) replays a finished read instead of repeating it, so
+pressing "Find socials from their site" twice is not two purchases; `0` disables the replay and makes
+every click a fresh, paid read. `APIFY_CONTACTS_MAX_CHARGE_USD` cannot go
+below `$0.50` — the actor refuses a run below its own minimum with
+`max-total-charge-usd-below-minimum`, so that is a run that never starts rather than a tighter cap,
+and it is deliberately a *separate* setting to `APIFY_MAX_CHARGE_USD`'s `$0.25`. It is a
+`PAY_PER_EVENT` actor, so `APIFY_MAX_ITEMS` does not bound it: the page ceiling
+(`APIFY_CONTACTS_MAX_PAGES`) and the dollars are the real guards.
+
 `GROQ_API_KEY` switches on AI drafting. It is the only drafting variable that has to be set: the
 endpoint defaults to Groq's OpenAI-compatible API and the model to `openai/gpt-oss-120b` (Groq's
 production-tier 120B model — note that the widely-quoted `llama-3.3-70b-versatile` is now
@@ -150,6 +183,7 @@ supabase functions deploy serp-scan --no-verify-jwt
 supabase functions deploy serp-competitors --no-verify-jwt
 supabase functions deploy keyword-ideas --no-verify-jwt
 supabase functions deploy social-scan --no-verify-jwt
+supabase functions deploy web-contacts-scan --no-verify-jwt
 supabase functions deploy reviews-sync --no-verify-jwt
 supabase functions deploy review-reply --no-verify-jwt
 # Inbound provider webhook — also fine without the platform JWT check.
@@ -183,6 +217,24 @@ secret is set.
   a paid run is never thrown away. Costs are logged exactly once per run, at
   collection. A provider-side run failure is transient and keeps the connection
   `active`; only a profile the provider rejects sets `needs_reauth`.
+- `web-contacts-scan` runs in three modes — `preview` (onboarding, before a business row exists),
+  `stored` (a competitor's saved website) and `collect` (pick up a run whose wait ran out). Preview
+  is authenticated but **not** tenant-scoped, because there is no workspace to scope it to yet: it is
+  bounded to one target, one run and a hard page/dollar ceiling, and the per-user ledger that closes
+  the residual gap is Phase 4 of `docs/SOURCE_MANAGEMENT_BLUEPRINT.md`. A contacts run that outlives
+  the wait is collected from `competitors.contacts_run_id`, and its cost is logged once, at
+  collection.
+- `web-contacts-scan` keeps a ledger (`contacts_discovery_runs`, migration `0020`) because its
+  guarantees are database facts rather than read-then-write hopes: a partial unique index permits one
+  live **stored** run per competitor, so two concurrent clicks cannot both start one; the row is
+  written *before* the actor is called, because a claim has to precede the spend to mean anything; and
+  a claim older than 30 minutes is expired, so an invocation that dies mid-run cannot lock the
+  competitor out of discovery permanently. Collection resolves the run from that table by `run_id`
+  **and** `user_id` — a run id alone is not enough to read another account's proposals, and an unknown
+  or foreign run gets the same `404` so a guessed id cannot be confirmed. The table is service-role
+  only (RLS on, no policies — verified against the live project: an anon `select` returns `[]` and an
+  anon `insert` is refused with `42501`). Only the normalised proposals are stored, which is the same
+  personal-data boundary as the normaliser itself.
 - Never log a secret or an `Authorization` header.
 - Every provider call goes through `_shared/http.ts` and is followed by `recordUsage()`.
 - Every provider **write** (post, reply) goes through `withIdempotency()`.

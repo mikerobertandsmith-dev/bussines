@@ -97,6 +97,12 @@ export interface ProviderConfig {
   configured: boolean;
   cap: number;
   capUsd: number;
+  /**
+   * Features the provider could serve that this deployment has switched off,
+   * as ready copy. Not a credential problem — Apify still runs social scans
+   * without a contacts actor id, and saying so is the point.
+   */
+  inactiveFeatures: string[];
 }
 
 /** How far a provider is into its monthly allowance, as a percentage. */
@@ -262,6 +268,7 @@ export function buildProviderStatus(input: {
       description: meta.description,
       envKeys: meta.envKeys,
       configured: config?.configured === true,
+      inactiveFeatures: config?.inactiveFeatures ?? [],
       connections: counts.get(provider) ?? 0,
       requests: totals?.requests ?? 0,
       costUsd: Number((totals?.costUsd ?? 0).toFixed(2)),
@@ -292,7 +299,13 @@ export async function fetchProviderConfig(): Promise<
     const map: Partial<Record<IntegrationProvider, ProviderConfig>> = {};
     for (const entry of providers) {
       if (!entry || typeof entry !== "object") continue;
-      const record = entry as { provider?: unknown; configured?: unknown; cap?: unknown; capUsd?: unknown };
+      const record = entry as {
+        provider?: unknown;
+        configured?: unknown;
+        cap?: unknown;
+        capUsd?: unknown;
+        inactiveFeatures?: unknown;
+      };
       const provider = record.provider;
       if (
         provider !== "serpapi" &&
@@ -307,6 +320,11 @@ export async function fetchProviderConfig(): Promise<
         configured: record.configured === true,
         cap: Number(record.cap ?? 0) || 0,
         capUsd: Number(record.capUsd ?? 0) || 0,
+        // An older deployment does not send this at all — an absent list is "
+        // nothing known to be off", never undefined in the UI.
+        inactiveFeatures: Array.isArray(record.inactiveFeatures)
+          ? record.inactiveFeatures.filter((item): item is string => typeof item === "string")
+          : [],
       };
     }
     return map;

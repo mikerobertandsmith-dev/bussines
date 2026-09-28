@@ -3,20 +3,26 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  Check,
   ChevronRight,
   Download,
   ExternalLink,
   PackageSearch,
+  Pencil,
+  Plus,
   RefreshCw,
   Sparkles,
+  Trash2,
   Truck,
 } from "lucide-react";
 import {
   Badge,
   Card,
   CardHead,
+  ConfirmButton,
   Detail,
   EmptyState,
+  Field,
   Notice,
   Segmented,
   SiteLogo,
@@ -32,9 +38,24 @@ import { AreaChart } from "../components/charts";
 import { Modal } from "../components/Modal";
 import { useActionToast, useToast } from "../components/Toast";
 import { alertsFor } from "../lib/alerts";
-import { cadenceLabel, daysAgo, money, relativeTime, shortDate, titleCase } from "../lib/format";
+import {
+  cadenceLabel,
+  daysAgo,
+  money,
+  normaliseWebsite,
+  relativeTime,
+  shortDate,
+  titleCase,
+} from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
-import type { Cadence, ChangeType, SupplierItem, TrafficPoint } from "../lib/types";
+import type {
+  Cadence,
+  ChangeType,
+  Supplier,
+  SupplierInput,
+  SupplierItem,
+  TrafficPoint,
+} from "../lib/types";
 
 const CHANGE_TABS: { value: ChangeType | "all"; label: string }[] = [
   { value: "all", label: "All" },
@@ -81,6 +102,24 @@ function actionFor(item: SupplierItem): string {
   }
 }
 
+/**
+ * What removing a supplier takes with it, counted from what is on screen.
+ *
+ * Our own catalogue is deliberately not in the list: `inventory_recommendations`
+ * references suppliers with `on delete set null`, so items and ad briefs built
+ * from them survive the delete. The note says so rather than leaving the user to
+ * guess whether they are about to lose their own work.
+ */
+function supplierRemovalNote(supplier: Supplier | null, detected: number): string {
+  if (!supplier) return "";
+  if (detected === 0) {
+    return "Nothing else is stored against them yet, so only the supplier goes. This cannot be undone.";
+  }
+  return `This also deletes the ${detected} detected product${
+    detected === 1 ? "" : "s"
+  } we hold from them. Your own catalogue and ad briefs stay — they just lose the supplier link.`;
+}
+
 function priceDelta(item: SupplierItem) {
   if (item.previousPrice === item.price) return null;
   const diff = item.price - item.previousPrice;
@@ -101,6 +140,27 @@ export function SuppliersPage() {
   const [supplierId, setSupplierId] = useState<string>("all");
   const [query, setQuery] = useState("");
   const [openItem, setOpenItem] = useState<SupplierItem | null>(null);
+
+  /** The add/edit form: closed, "new", or the supplier being edited. */
+  const [formTarget, setFormTarget] = useState<Supplier | "new" | null>(null);
+  const [form, setForm] = useState<SupplierInput>({
+    name: "",
+    website: "",
+    category: "",
+    cadence: "daily",
+    leadTimeDays: undefined,
+    notes: "",
+  });
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState<Supplier | null>(null);
+  const [removing, setRemoving] = useState(false);
+
+  const editing = formTarget && formTarget !== "new" ? formTarget : null;
+  /** How many catalogue items the supplier awaiting confirmation is responsible for. */
+  const confirmDetected = confirmTarget
+    ? items.filter((i) => i.supplierId === confirmTarget.id).length
+    : 0;
 
   const alerts = alertsFor(workspace, "suppliers");
 
@@ -160,6 +220,97 @@ export function SuppliersPage() {
       success: `Scan queued for all ${suppliers.length} supplier sites — results land with the next job run.`,
       failure: "Those scans could not be queued.",
     });
+  }
+
+  function openAddSupplier() {
+    setForm({
+      name: "",
+      website: "",
+      category: "",
+      cadence: sharedCadence,
+      leadTimeDays: undefined,
+      notes: "",
+    });
+    setFormError(null);
+    setFormTarget("new");
+  }
+
+  function openEditSupplier(supplier: Supplier) {
+    setForm({
+      name: supplier.name,
+      website: supplier.website,
+      category: supplier.category,
+      cadence: supplier.cadence,
+      // 0 means "never entered", so the field starts blank rather than at zero.
+      leadTimeDays: supplier.leadTimeDays || undefined,
+      notes: supplier.notes ?? "",
+    });
+    setFormError(null);
+    setFormTarget(supplier);
+  }
+
+  /**
+   * Saves the add/edit form.
+   *
+   * A failure keeps the dialog open with what was typed and the reason inline: a
+   * closed dialog plus an error toast loses the input and reads like a success.
+   */
+  async function submitSupplier() {
+    const name = form.name.trim();
+    const website = normaliseWebsite(form.website);
+    if (!name || !website) {
+      setFormError("Add a name and a website address — that is what gets scanned.");
+      return;
+    }
+    const leadTimeDays = Number.isFinite(form.leadTimeDays) ? form.leadTimeDays : undefined;
+
+    setSaving(true);
+    setFormError(null);
+    try {
+      if (editing) {
+        await actions.updateSupplier(editing.id, {
+          name,
+          website,
+          category: form.category,
+          cadence: form.cadence,
+          leadTimeDays,
+          notes: form.notes,
+        });
+        toast(`${name} updated — the next scan uses the new details.`);
+      } else {
+        const created = await actions.addSupplier({
+          name,
+          website,
+          category: form.category,
+          cadence: form.cadence,
+          leadTimeDays,
+          notes: form.notes,
+        });
+        toast(`${created.name} is now being watched.`);
+      }
+      setFormTarget(null);
+    } catch (cause) {
+      setFormError(cause instanceof Error ? cause.message : "That supplier could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeSupplier() {
+    if (!confirmTarget) return;
+    const target = confirmTarget;
+    setRemoving(true);
+    try {
+      await actions.removeSupplier(target.id);
+      // The supplier filter would otherwise be holding a row that no longer exists.
+      if (supplierId === target.id) setSupplierId("all");
+      setConfirmTarget(null);
+      toast(`Stopped watching ${target.name} and cleared the items we held from them.`);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "That supplier could not be removed.");
+    } finally {
+      setRemoving(false);
+    }
   }
 
   function exportCsv() {
@@ -276,23 +427,42 @@ export function SuppliersPage() {
             <Truck size={16} className="text-indigo-600" /> Watching
           </span>
 
+          {/* Each pill stays a link to their site; managing one is the small pencil
+              beside it, so the row does not turn into two buttons per supplier. */}
           {suppliers.map((s) => (
-            <a
+            <span
               key={s.id}
-              href={s.website}
-              target="_blank"
-              rel="noreferrer"
-              title={`Open ${s.name} in a new tab`}
-              className="flex items-center gap-2 rounded-full py-1 pr-3 pl-1 text-xs font-medium text-slate-600 ring-1 ring-slate-300 transition hover:bg-slate-50 hover:text-indigo-600"
+              className="flex items-center gap-0.5 rounded-full py-0.5 pr-0.5 pl-1 ring-1 ring-slate-300 transition hover:bg-slate-50"
             >
-              <SiteLogo website={s.website} name={s.name} size={22} />
-              <span className="max-w-40 truncate">{s.name}</span>
-            </a>
+              <a
+                href={s.website}
+                target="_blank"
+                rel="noreferrer"
+                title={`Open ${s.name} in a new tab`}
+                className="flex items-center gap-2 py-0.5 text-xs font-medium text-slate-600 transition hover:text-indigo-600"
+              >
+                <SiteLogo website={s.website} name={s.name} size={22} />
+                <span className="max-w-40 truncate">{s.name}</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => openEditSupplier(s)}
+                title={`Edit ${s.name}`}
+                aria-label={`Edit ${s.name}`}
+                className="rounded-full p-1.5 text-slate-400 transition hover:bg-white hover:text-indigo-600"
+              >
+                <Pencil size={12} />
+              </button>
+            </span>
           ))}
+
+          <button type="button" className={btnGhost} onClick={openAddSupplier}>
+            <Plus size={13} /> Add supplier
+          </button>
 
           {suppliers.length === 0 ? (
             <span className="text-xs text-slate-500">
-              No supplier sites yet — add them during setup and they appear here.
+              No supplier sites yet — nothing is being checked.
             </span>
           ) : (
             <span className="ml-auto flex flex-wrap items-center gap-2">
@@ -355,6 +525,11 @@ export function SuppliersPage() {
             <EmptyState
               title="No suppliers yet"
               hint="Add the supplier sites you buy from — their catalogues, prices and stock will be checked on the cadence you choose."
+              action={
+                <button type="button" className={btnPrimary} onClick={openAddSupplier}>
+                  <Plus size={13} /> Add supplier
+                </button>
+              }
             />
           ) : filtered.length === 0 ? (
             <EmptyState
@@ -533,6 +708,155 @@ export function SuppliersPage() {
             </div>
           </div>
         ) : null}
+      </Modal>
+
+      {/* ------------------------------------------------ add / edit a supplier */}
+      <Modal
+        open={formTarget !== null}
+        onClose={() => setFormTarget(null)}
+        title={editing ? `Edit ${editing.name}` : "Add a supplier"}
+        subtitle={
+          editing
+            ? "Changes apply from the next scan — what we already detected stays attached."
+            : "We check their catalogue, prices and stock on the cadence you pick."
+        }
+        icon={<Truck size={16} />}
+        footer={
+          <>
+            {editing ? (
+              <button
+                type="button"
+                className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50"
+                onClick={() => {
+                  // Removing is handed to the confirm dialog: it names what goes
+                  // with them and needs the second click.
+                  setConfirmTarget(editing);
+                  setFormTarget(null);
+                }}
+              >
+                <Trash2 size={13} /> Remove supplier
+              </button>
+            ) : null}
+            <button type="button" className={btnGhost} onClick={() => setFormTarget(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={btnPrimary}
+              disabled={saving}
+              onClick={() => void submitSupplier()}
+            >
+              {editing ? <Check size={13} /> : <Plus size={13} />}
+              {editing ? "Save changes" : "Add supplier"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Name">
+            <input
+              className={inputClass}
+              placeholder="e.g. Lumière Cosmetics Supply"
+              value={form.name}
+              onChange={(event) => setForm({ ...form, name: event.target.value })}
+            />
+          </Field>
+          <Field label="Website" hint="Their catalogue. A pasted URL is reduced to its domain.">
+            <input
+              className={inputClass}
+              placeholder="supplier.com"
+              value={form.website}
+              onChange={(event) => setForm({ ...form, website: event.target.value })}
+            />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Category">
+              <input
+                className={inputClass}
+                placeholder="e.g. Beauty & cosmetics"
+                value={form.category ?? ""}
+                onChange={(event) => setForm({ ...form, category: event.target.value })}
+              />
+            </Field>
+            <Field label="Check cadence">
+              <select
+                className={inputClass}
+                value={form.cadence}
+                onChange={(event) =>
+                  setForm({ ...form, cadence: event.target.value as Cadence })
+                }
+              >
+                {CADENCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Lead time (days)" hint="How long their stock takes to arrive.">
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                placeholder="e.g. 14"
+                value={form.leadTimeDays ?? ""}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    leadTimeDays: event.target.value === "" ? undefined : Number(event.target.value),
+                  })
+                }
+              />
+            </Field>
+            <Field label="Notes" hint="For you and your team — never sent anywhere.">
+              <input
+                className={inputClass}
+                placeholder="Anything worth remembering"
+                value={form.notes ?? ""}
+                onChange={(event) => setForm({ ...form, notes: event.target.value })}
+              />
+            </Field>
+          </div>
+          {formError ? <p className="text-[11px] text-amber-600">{formError}</p> : null}
+        </div>
+      </Modal>
+
+      {/* ------------------------------------------------ stop watching a supplier */}
+      <Modal
+        open={confirmTarget !== null}
+        onClose={() => setConfirmTarget(null)}
+        title={`Stop watching ${confirmTarget?.name ?? "this supplier"}?`}
+        subtitle="Their row goes, and the catalogue items detected from it go too"
+        icon={<Trash2 size={16} />}
+        footer={
+          <>
+            <button
+              type="button"
+              className={btnGhost}
+              disabled={removing}
+              onClick={() => setConfirmTarget(null)}
+            >
+              Keep watching
+            </button>
+            <ConfirmButton
+              label="Remove supplier"
+              confirmLabel="Delete permanently"
+              icon={<Trash2 size={13} />}
+              busy={removing}
+              onConfirm={() => void removeSupplier()}
+            />
+          </>
+        }
+      >
+        <div className="space-y-3 px-4 py-4">
+          <p className="text-sm text-slate-700">
+            {confirmTarget?.name ?? "This supplier"} stops being checked and disappears from the
+            watching row above.
+          </p>
+          <p className="rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-2 text-[12px] text-rose-900">
+            {supplierRemovalNote(confirmTarget, confirmDetected)}
+          </p>
+        </div>
       </Modal>
     </div>
   );

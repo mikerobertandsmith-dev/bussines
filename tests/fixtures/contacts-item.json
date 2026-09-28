@@ -1,0 +1,25 @@
+[
+  {
+    "depth": 0,
+    "originalStartUrl": "https://www.cotopaxi.com",
+    "scrapedUrls": ["https://www.cotopaxi.com/", "https://www.cotopaxi.com/pages/about-us"],
+    "domain": "cotopaxi.com",
+    "emails": [],
+    "phones": [],
+    "phonesUncertain": ["507703575971618"],
+    "linkedIns": [],
+    "twitters": ["https://twitter.com/cotopaxi"],
+    "instagrams": ["https://www.instagram.com/cotopaxi"],
+    "facebooks": ["https://www.facebook.com/Cotopaxi-507703575971618"],
+    "youtubes": ["https://www.youtube.com/user/GearForGood"],
+    "tiktoks": ["https://www.tiktok.com/@cotopaxiofficial"],
+    "pinterests": [],
+    "discords": [],
+    "snapchats": [],
+    "threads": [],
+    "telegrams": [],
+    "reddits": [],
+    "whatsapps": [],
+    "leadsEnrichment": []
+  }
+]

@@ -7,9 +7,11 @@ import type {
   BusinessProfile,
   Client,
   Competitor,
+  CompetitorInput,
   CompetitorItem,
   CompetitorReview,
   CompetitorReviewGap,
+  CompetitorSocialInput,
   GeoRankRow,
   InventoryItem,
   IntegrationConnection,
@@ -43,6 +45,7 @@ import type {
   SocialChannel,
   SocialScore,
   Supplier,
+  SupplierInput,
   SupplierItem,
   TrafficPoint,
   WeeklyReport,
@@ -172,19 +175,40 @@ export async function createWorkspaceFromOnboarding(
     if (supplierError) throw new Error(supplierError.message);
   }
 
-  const competitorPayload = input.competitors
-    .filter((c) => c.name.trim())
-    .map((c) => ({
-      business_id: businessId,
-      name: c.name.trim(),
-      website: c.website.trim(),
-      cadence: c.cadence || input.supplierCadence,
-      notes: c.category ? `Category: ${c.category}` : null,
-    }));
+  // Inserted one at a time, and read back, because a competitor's social profiles
+  // have to hang off a row that exists — `competitor_social` carries a
+  // `competitor_id`. A bulk insert would not tell us which id belongs to which
+  // input row (PostgREST is not obliged to return them in input order), and
+  // keying on the name would be wrong: two competitors may legitimately share one.
+  // The list is a handful of rows, so the extra round trips are not worth avoiding.
+  const competitorInputs = input.competitors.filter((c) => c.name.trim());
+  for (const competitor of competitorInputs) {
+    const { data: created, error: competitorError } = await db
+      .from("competitors")
+      .insert({
+        business_id: businessId,
+        name: competitor.name.trim(),
+        website: competitor.website.trim(),
+        cadence: competitor.cadence || input.supplierCadence,
+        notes: competitor.category ? `Category: ${competitor.category}` : null,
+      })
+      .select()
+      .single();
+    if (competitorError || !created) {
+      throw new Error(competitorError?.message ?? "Could not add a competitor.");
+    }
 
-  if (competitorPayload.length) {
-    const { error: competitorError } = await db.from("competitors").insert(competitorPayload);
-    if (competitorError) throw new Error(competitorError.message);
+    // Written through the same function the Competition page and (in Phase 3)
+    // discovery use, so there is one place that normalises a handle, drops rows it
+    // cannot address, and upserts on `(business_id, competitor_id, platform)` —
+    // adding the same platform twice replaces rather than stacking a target.
+    if (competitor.socials?.length) {
+      await saveCompetitorSocialHandles(businessId, {
+        competitorId: created.id as string,
+        handles: competitor.socials,
+        source: "manual",
+      });
+    }
   }
 
   const clientPayload = input.seedClients
@@ -367,20 +391,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
   const competitors: Competitor[] = competitorRows.map((c) => {
     const related = (list: Row[]) => list.filter((r) => r.competitor_id === c.id);
     return {
-      id: c.id,
-      name: str(c.name),
-      website: str(c.website),
-      cadence: (c.cadence ?? "daily") as Cadence,
-      lastScan: str(c.last_scan_at, new Date().toISOString()),
-      monthlyVisits: num(c.monthly_visits),
-      visitsChange: num(c.visits_change),
-      seoScore: num(c.seo_score),
-      geoScore: num(c.geo_score),
-      rating: num(c.rating),
-      previousRating: num(c.previous_rating, num(c.rating)),
-      reviewCount: num(c.review_count),
-      reviewsThisMonth: num(c.reviews_this_month),
-      adPlatforms: (c.ad_platforms ?? []) as string[],
+      ...mapCompetitorBase(c),
       traffic: orderBySort(related(metricRows).filter((m) => m.kind === "traffic")).map((m) => ({
         label: str(m.label),
         visits: num(m.value),
@@ -546,18 +557,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     /* downloadUrl is filled with a signed Storage URL below */
     profile,
     metrics,
-    suppliers: supplierRows.map<Supplier>((s) => ({
-      id: s.id,
-      name: str(s.name),
-      website: str(s.website),
-      category: str(s.category),
-      cadence: (s.cadence ?? "daily") as Cadence,
-      lastScan: str(s.last_scan_at, str(s.created_at, new Date().toISOString())),
-      nextScan: str(s.next_scan_at, nextScanFrom((s.cadence ?? "daily") as Cadence)),
-      scanHealth: num(s.scan_health, 100),
-      accountManager: str(s.account_manager),
-      leadTimeDays: num(s.lead_time_days),
-    })),
+    suppliers: supplierRows.map<Supplier>(mapSupplierRow),
     supplierItems: supplierItemRows.map<SupplierItem>((i) => ({
       id: i.id,
       supplierId: i.supplier_id,
@@ -788,6 +788,194 @@ export async function setCompetitorCadence(competitorId: string, cadence: Cadenc
     .update({ cadence })
     .eq("id", competitorId);
   if (error) throw new Error(error.message);
+}
+
+/* ------------------------------------------- watched sources (add / edit / remove) */
+
+/**
+ * Adds a competitor.
+ *
+ * The created row comes back in the client shape so the page can show and select
+ * it without a reload. A brand-new competitor genuinely has no traffic, keywords,
+ * posts or reviews yet, which is exactly what `mapCompetitorBase` returns — so
+ * nothing here has to invent placeholder numbers.
+ */
+export async function createCompetitorRow(
+  businessId: string,
+  input: CompetitorInput,
+): Promise<Competitor> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from("competitors")
+    .insert({
+      business_id: businessId,
+      name: input.name.trim(),
+      website: input.website.trim(),
+      cadence: input.cadence,
+      notes: input.notes?.trim() || null,
+    })
+    .select()
+    .single();
+  if (error || !data) throw new Error(error?.message ?? "Could not add that competitor.");
+
+  return mapCompetitorBase(data as Row);
+}
+
+/**
+ * Edits the columns the competitor form owns, and only those.
+ *
+ * Changing the website does not detach the competitor's history: scans, posts and
+ * reviews all hang off `competitor_id`, so they stay attached to the same row.
+ */
+export async function updateCompetitorRow(competitorId: string, patch: Partial<CompetitorInput>) {
+  const db = requireSupabase();
+  const payload: Row = {};
+  if (patch.name !== undefined) payload.name = patch.name.trim();
+  if (patch.website !== undefined) payload.website = patch.website.trim();
+  if (patch.cadence !== undefined) payload.cadence = patch.cadence;
+  if (patch.notes !== undefined) payload.notes = patch.notes.trim() || null;
+  if (!Object.keys(payload).length) return;
+
+  const { error } = await db.from("competitors").update(payload).eq("id", competitorId);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Stops watching a competitor.
+ *
+ * Every child table references `competitors` with `on delete cascade`, so one
+ * delete also clears their metrics, social handles, keywords, ads, reviews,
+ * audience slices, detected items, share of voice, review gap, scraped posts and
+ * monitor targets. The UI must say so before it calls this — there is no undo.
+ */
+export async function deleteCompetitorRow(competitorId: string) {
+  const db = requireSupabase();
+  const { error } = await db.from("competitors").delete().eq("id", competitorId);
+  if (error) throw new Error(error.message);
+}
+
+/** Adds a supplier site to watch, with the same scheduling onboarding gives one. */
+export async function createSupplierRow(
+  businessId: string,
+  input: SupplierInput,
+): Promise<Supplier> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from("suppliers")
+    .insert({
+      business_id: businessId,
+      name: input.name.trim(),
+      website: input.website.trim(),
+      category: input.category?.trim() || null,
+      cadence: input.cadence,
+      lead_time_days: input.leadTimeDays ?? null,
+      notes: input.notes?.trim() || null,
+      next_scan_at: nextScanFrom(input.cadence),
+    })
+    .select()
+    .single();
+  if (error || !data) throw new Error(error?.message ?? "Could not add that supplier.");
+
+  return mapSupplierRow(data as Row);
+}
+
+/**
+ * Edits the columns the supplier form owns. A cadence change re-schedules the
+ * next scan, the way `setSupplierCadence` does, so the two paths cannot drift.
+ */
+export async function updateSupplierRow(supplierId: string, patch: Partial<SupplierInput>) {
+  const db = requireSupabase();
+  const payload: Row = {};
+  if (patch.name !== undefined) payload.name = patch.name.trim();
+  if (patch.website !== undefined) payload.website = patch.website.trim();
+  if (patch.category !== undefined) payload.category = patch.category.trim() || null;
+  if (patch.leadTimeDays !== undefined) payload.lead_time_days = patch.leadTimeDays;
+  if (patch.notes !== undefined) payload.notes = patch.notes.trim() || null;
+  if (patch.cadence !== undefined) {
+    payload.cadence = patch.cadence;
+    payload.next_scan_at = nextScanFrom(patch.cadence);
+  }
+  if (!Object.keys(payload).length) return;
+
+  const { error } = await db.from("suppliers").update(payload).eq("id", supplierId);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Stops watching a supplier site.
+ *
+ * `supplier_items` cascade away with it, but our own catalogue does not:
+ * `inventory_recommendations.supplier_id` is `on delete set null`, so items and
+ * briefs that referenced this supplier survive with the link cleared.
+ */
+export async function deleteSupplierRow(supplierId: string) {
+  const db = requireSupabase();
+  const { error } = await db.from("suppliers").delete().eq("id", supplierId);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Saves a competitor's whole set of profiles in one call — the onboarding path,
+ * where a competitor can arrive with several.
+ *
+ * One row per competitor per platform, which is what the unique index from
+ * `0016_competitor_social_handles.sql` enforces, so re-saving a platform replaces
+ * its handle instead of stacking a second scrape target.
+ *
+ * Handles are normalised to the bare username first. The gateway builds the
+ * profile URL around what is stored, so a pasted profile URL would be embedded
+ * inside another URL and the scrape would quietly return nothing.
+ *
+ * Rows we cannot address are dropped rather than saved: a handle with no platform,
+ * or a blank one, is a billed target that can only ever come back empty. The first
+ * entry wins when the same platform appears twice, matching `mergeSocialChannel`.
+ */
+export async function saveCompetitorSocialHandles(
+  businessId: string,
+  input: {
+    competitorId: string;
+    handles: CompetitorSocialInput[];
+    /** Defaults to `manual`: a person entered it. */
+    source?: "manual" | "discovered" | "imported";
+  },
+): Promise<SocialChannel[]> {
+  const db = requireSupabase();
+  const source = input.source ?? "manual";
+
+  const seen = new Set<string>();
+  const payload = input.handles
+    .map((row) => ({
+      platform: socialPlatformOf(row.platform) ?? row.platform.trim().toLowerCase(),
+      handle: normaliseSocialHandle(row.handle),
+      // A row may carry its own provenance: onboarding records an accepted
+      // proposal as `discovered` and anything the user corrected as `manual`, in
+      // one save. Rows without one take the call's default.
+      source: row.source ?? source,
+    }))
+    .filter((row) => {
+      if (!row.platform || !row.handle || seen.has(row.platform)) return false;
+      seen.add(row.platform);
+      return true;
+    });
+  if (!payload.length) return [];
+
+  const { data, error } = await db
+    .from("competitor_social")
+    .upsert(
+      payload.map((row) => ({
+        business_id: businessId,
+        competitor_id: input.competitorId,
+        platform: row.platform,
+        handle: row.handle,
+        source: row.source,
+        discovered_at: row.source === "discovered" ? new Date().toISOString() : null,
+      })),
+      { onConflict: "business_id,competitor_id,platform" },
+    )
+    .select();
+  if (error) throw new Error(error.message);
+
+  return ((data ?? []) as Row[]).map(mapSocialChannel);
 }
 
 /** Queues a scan. The scheduled job picks this up and writes the results. */
@@ -1573,6 +1761,9 @@ export async function saveCompetitorSocialHandle(
         platform,
         handle,
         followers: Number.isFinite(input.followers) ? Number(input.followers) : 0,
+        // A handle a person typed or corrected is manual, whichever way it was
+        // first found: provenance follows what is stored now, not its history.
+        source: "manual",
       },
       { onConflict: "business_id,competitor_id,platform" },
     )
@@ -1614,6 +1805,67 @@ export async function deleteCompetitorSocialHandle(
 
 /* ---------------------------------------------------------------- mapping */
 
+/**
+ * One competitor row's own columns.
+ *
+ * The related collections (traffic, keywords, ads, reviews …) are **not**
+ * included: `loadWorkspace` spreads them on top, and a competitor that was just
+ * created has none of them. Keeping the scalars here means the create and update
+ * paths map through the same function as the loader instead of a second copy of
+ * these fields that would quietly drift out of step.
+ */
+function mapCompetitorBase(row: Row): Competitor {
+  return {
+    id: row.id,
+    name: str(row.name),
+    website: str(row.website),
+    cadence: (row.cadence ?? "daily") as Cadence,
+    // Carried so the edit form can prefill it. Without it, re-saving a competitor
+    // would blank notes the user had written.
+    notes: str(row.notes) || undefined,
+    lastScan: str(row.last_scan_at, new Date().toISOString()),
+    monthlyVisits: num(row.monthly_visits),
+    visitsChange: num(row.visits_change),
+    seoScore: num(row.seo_score),
+    geoScore: num(row.geo_score),
+    rating: num(row.rating),
+    previousRating: num(row.previous_rating, num(row.rating)),
+    reviewCount: num(row.review_count),
+    reviewsThisMonth: num(row.reviews_this_month),
+    adPlatforms: (row.ad_platforms ?? []) as string[],
+    // Written only by the contacts gateway; shown so the button can report a run
+    // that is still going rather than starting a second one.
+    contactsStatus: str(row.contacts_status) || undefined,
+    contactsScannedAt: str(row.contacts_scanned_at) || undefined,
+    traffic: [],
+    reviewTrend: [],
+    trafficSources: [],
+    social: [],
+    keywordGap: [],
+    ads: [],
+    reviews: [],
+    audience: [],
+    newItems: [],
+  };
+}
+
+/** One supplier row, mapped onto the client shape. */
+function mapSupplierRow(row: Row): Supplier {
+  return {
+    id: row.id,
+    name: str(row.name),
+    website: str(row.website),
+    category: str(row.category),
+    cadence: (row.cadence ?? "daily") as Cadence,
+    lastScan: str(row.last_scan_at, str(row.created_at, new Date().toISOString())),
+    nextScan: str(row.next_scan_at, nextScanFrom((row.cadence ?? "daily") as Cadence)),
+    scanHealth: num(row.scan_health, 100),
+    accountManager: str(row.account_manager),
+    leadTimeDays: num(row.lead_time_days),
+    notes: str(row.notes) || undefined,
+  };
+}
+
 function mapSocialChannel(row: Row): SocialChannel {
   return {
     platform: str(row.platform),
@@ -1622,6 +1874,7 @@ function mapSocialChannel(row: Row): SocialChannel {
     engagementRate: num(row.engagement_rate),
     postsPerWeek: num(row.posts_per_week),
     adsRunning: num(row.ads_running),
+    source: (row.source ?? "manual") as SocialChannel["source"],
   };
 }
 

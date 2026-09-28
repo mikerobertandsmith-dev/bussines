@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "../src/App";
@@ -18,6 +18,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  vi.unstubAllGlobals();
 });
 
 function text() {
@@ -63,6 +64,15 @@ function dialogButton(label: string) {
   return Array.from(activeDialog().querySelectorAll("button")).find((b) =>
     (b.textContent ?? "").includes(label),
   );
+}
+
+/** The big number in a named `Stat` card, e.g. "Suppliers monitored". */
+function statValue(label: string): number {
+  const labelEl = Array.from(container.querySelectorAll("p")).find(
+    (p) => (p.textContent ?? "").trim() === label,
+  );
+  const card = labelEl?.closest("section");
+  return Number(card?.querySelector("p.text-2xl")?.textContent ?? "");
 }
 
 async function render() {
@@ -513,6 +523,195 @@ describe("Market Watch app", () => {
       (anchor) => anchor.getAttribute("href") ?? "",
     );
     expect(hrefs.some((href) => href.includes("social.example.com/p/demo-ad"))).toBe(true);
+  });
+
+  it("adds, edits and removes a competitor from the competition page", async () => {
+    await render();
+    click(findByText("button", "Competition"));
+    expect(text()).toContain("GlowMart Beauty");
+
+    // The confirm names the collateral before anything goes. GlowMart is the
+    // default competitor and has measured data, so its note can be specific.
+    click(findByExactText("button", "Remove"));
+    expect(activeDialog().textContent ?? "").toContain("Stop watching GlowMart Beauty?");
+    expect(activeDialog().textContent ?? "").toContain("monitored social profile");
+    expect(activeDialog().textContent ?? "").toContain("cannot be undone");
+    click(dialogButton("Keep watching"));
+    await act(async () => {});
+    expect(text()).toContain("GlowMart Beauty");
+
+    // Add: an empty form is refused inline rather than saved as a blank row.
+    click(findByText("button", "Add competitor"));
+    let dialog = activeDialog();
+    click(dialogButton("Add competitor"));
+    await act(async () => {});
+    expect(activeDialog().textContent ?? "").toContain("Add a name and a website address");
+
+    dialog = activeDialog();
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="e.g. GlowMart Beauty"]'),
+      "Halo Beauty Co",
+    );
+    // A bare domain is normalised to a URL, so the scan has something to open.
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="glowmart.com"]'),
+      "halobeauty.com",
+    );
+    click(dialogButton("Add competitor"));
+    await act(async () => {});
+
+    expect(text()).toContain("Halo Beauty Co is now being watched.");
+    // It becomes the active competitor rather than being added out of sight.
+    expect(text()).toContain("Halo Beauty Co traffic and where it comes from");
+
+    // Edit: the form opens prefilled from what is stored, and a website is
+    // reduced to its host however it is typed.
+    click(findByExactText("button", "Edit"));
+    dialog = activeDialog();
+    expect(dialog.querySelector<HTMLInputElement>('input[placeholder="glowmart.com"]')?.value).toBe(
+      "https://halobeauty.com",
+    );
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="glowmart.com"]'),
+      "https://halobeauty.com/shop",
+    );
+    click(dialogButton("Save changes"));
+    await act(async () => {});
+    expect(text()).toContain("Halo Beauty Co updated");
+
+    // Remove: one click only arms the button, the second does the delete.
+    click(findByExactText("button", "Remove"));
+    dialog = activeDialog();
+    expect(dialog.textContent ?? "").toContain("Nothing else is stored against them yet");
+    click(dialogButton("Remove competitor"));
+    await act(async () => {});
+    expect(text()).toContain("Halo Beauty Co");
+    expect(activeDialog().textContent ?? "").toContain("Delete permanently");
+
+    click(dialogButton("Delete permanently"));
+    await act(async () => {});
+    expect(text()).toContain("Stopped watching Halo Beauty Co");
+    // The pill is gone (the toast naming it still on screen does not count).
+    expect(findByExactText("button", "Halo Beauty Co")).toBeUndefined();
+    // The page falls back to a competitor that still exists.
+    expect(text()).toContain("GlowMart Beauty");
+  });
+
+  it("adds, edits and removes a supplier from the suppliers page", async () => {
+    await render();
+    expect(text()).toContain("Lumière Cosmetics Supply");
+    const monitored = statValue("Suppliers monitored");
+
+    // Add: an empty form is refused inline, then a full one is the last pill.
+    click(findByText("button", "Add supplier"));
+    let dialog = activeDialog();
+    click(dialogButton("Add supplier"));
+    await act(async () => {});
+    expect(activeDialog().textContent ?? "").toContain("Add a name and a website address");
+
+    dialog = activeDialog();
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="e.g. Lumière Cosmetics Supply"]'),
+      "Test Packaging Co",
+    );
+    // A catalogue path is reduced to the host — the site is what gets scanned.
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="supplier.com"]'),
+      "https://testpackaging.com/catalogue",
+    );
+    click(dialogButton("Add supplier"));
+    await act(async () => {});
+
+    expect(text()).toContain("Test Packaging Co is now being watched.");
+    expect(statValue("Suppliers monitored")).toBe(monitored + 1);
+
+    // Edit: the pencil beside the pill opens the same form, prefilled.
+    click(container.querySelector('button[aria-label="Edit Test Packaging Co"]'));
+    dialog = activeDialog();
+    expect(dialog.textContent ?? "").toContain("Edit Test Packaging Co");
+    typeInto(
+      dialog.querySelector<HTMLInputElement>('input[placeholder="e.g. Lumière Cosmetics Supply"]'),
+      "Test Packaging Ltd",
+    );
+    click(dialogButton("Save changes"));
+    await act(async () => {});
+    expect(text()).toContain("Test Packaging Ltd updated");
+
+    // The confirm separates their detected items from our own catalogue, which
+    // survives the delete, and only deletes on the second click.
+    click(container.querySelector('button[aria-label="Edit Lumière Cosmetics Supply"]'));
+    dialog = activeDialog();
+    click(dialogButton("Remove supplier"));
+    await act(async () => {});
+    expect(activeDialog().textContent ?? "").toContain("Stop watching Lumière Cosmetics Supply?");
+    expect(activeDialog().textContent ?? "").toContain("This also deletes the");
+    expect(activeDialog().textContent ?? "").toContain("catalogue and ad briefs stay");
+    click(dialogButton("Keep watching"));
+    await act(async () => {});
+    expect(text()).toContain("Lumière Cosmetics Supply");
+
+    click(container.querySelector('button[aria-label="Edit Test Packaging Ltd"]'));
+    dialog = activeDialog();
+    click(dialogButton("Remove supplier"));
+    await act(async () => {});
+    click(dialogButton("Remove supplier"));
+    await act(async () => {});
+    expect(text()).toContain("Test Packaging Ltd");
+    expect(activeDialog().textContent ?? "").toContain("Delete permanently");
+
+    click(dialogButton("Delete permanently"));
+    await act(async () => {});
+    expect(text()).toContain("Stopped watching Test Packaging Ltd");
+    // The pill and its manage button are gone (the toast still names it).
+    expect(container.querySelector('button[aria-label="Edit Test Packaging Ltd"]')).toBeNull();
+    expect(statValue("Suppliers monitored")).toBe(monitored);
+  });
+
+  it("proposes a competitor's socials from their own site, saving only what is ticked", async () => {
+    // Any network call would be the gateway — which demo mode must never reach.
+    const fetchSpy = vi.fn(() => {
+      throw new Error("the demo flow must not reach the network");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await render();
+    click(findByText("button", "Competition"));
+    // "Social" is also part of the nav label "Social & reviews", so match the tab exactly.
+    click(findByExactText("button", "Social"));
+    expect(text()).toContain("Social presence");
+
+    click(findByText("button", "Find socials from their site"));
+    await act(async () => {});
+
+    // The read names the site it read, pre-fills a handle, and reports the
+    // platform it found but has no scraper for — listed, never saved.
+    expect(text()).toContain("Read from glowmartbeauty.com");
+    expect(text()).toContain("Found, not monitored: YouTube");
+    expect(
+      container.querySelector<HTMLInputElement>('input[aria-label="Instagram handle"]')?.value,
+    ).toBe("glowmartbeauty");
+
+    // Nothing is written by the read itself: every monitorable profile starts
+    // ticked, but accepting is still a separate, explicit click.
+    expect(text()).toContain("Save 3 profiles");
+
+    // Unticking one takes it out of the payload entirely.
+    click(container.querySelector('button[aria-label="Save TikTok profile"]'));
+    await act(async () => {});
+    expect(text()).toContain("Save 2 profiles");
+
+    click(findByText("button", "Save 2 profiles"));
+    await act(async () => {});
+    expect(text()).toContain("Saved 2 discovered profiles for GlowMart Beauty.");
+
+    // The saved rows are badged as found rather than typed, and the row now says
+    // when it was last read.
+    expect(text()).toContain("found on their site");
+    expect(text()).toContain("Last checked");
+    expect(container.querySelector('input[aria-label="Instagram handle"]')).toBeNull();
+
+    // No function — and so no key, run or spend — was ever involved.
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
 });

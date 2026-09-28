@@ -22,6 +22,8 @@ export interface Supplier {
   scanHealth: number;
   accountManager: string;
   leadTimeDays: number;
+  /** Free text the user keeps about the supplier. Optional: most have none. */
+  notes?: string;
 }
 
 export interface SupplierItem {
@@ -56,6 +58,13 @@ export interface SocialChannel {
   engagementRate: number;
   postsPerWeek: number;
   adsRunning: number;
+  /**
+   * Where this handle came from. `discovered` means the contacts actor proposed
+   * it from the competitor's own website and the user accepted it; `manual` means
+   * a person typed or corrected it. Shown as a badge so a proposal never looks
+   * like something the user chose.
+   */
+  source?: "manual" | "discovered" | "imported";
 }
 
 /**
@@ -170,6 +179,16 @@ export interface Competitor {
   ads: AdCreative[];
   newItems: CompetitorItem[];
   keywordGap: KeywordGap[];
+  /** Free text the user keeps about the competitor. Optional: most have none. */
+  notes?: string;
+  /**
+   * Website contact discovery state, written only by `web-contacts-scan`:
+   * idle | running | done | failed | skipped. Read by the Social presence card so
+   * the button can say "checking…" instead of lying about having finished.
+   */
+  contactsStatus?: string;
+  /** When discovery last completed for this competitor. */
+  contactsScannedAt?: string;
 }
 
 /* ---------------- Clients ---------------- */
@@ -713,12 +732,99 @@ export interface ScanRun {
   finishedAt: string | null;
 }
 
+/**
+ * One competitor social profile, as entered by hand at onboarding or on the
+ * Competition page. `platform` is the key the gateway scrapes against
+ * (instagram | tiktok | facebook | x) and `handle` is the bare username.
+ */
+export interface CompetitorSocialInput {
+  platform: string;
+  handle: string;
+  /**
+   * Where this handle came from. Set per row so one save can carry both: an
+   * accepted proposal that was left alone is `discovered`, and one the user typed
+   * or corrected is `manual` — provenance follows what is stored, not who ran the
+   * scan. Absent means the caller's default applies.
+   */
+  source?: SocialChannel["source"];
+}
+
+/**
+ * One profile the contacts actor found on a competitor's own website.
+ *
+ * These are *suggestions*: every accepted handle becomes a billed scrape target,
+ * and a footer link can easily belong to the site's web agency rather than the
+ * competitor — so nothing here is written until a person accepts it.
+ */
+export interface SocialSuggestion {
+  /** instagram | tiktok | facebook | x — the keys the gateway scrapes against. */
+  platform: string;
+  /** The bare handle, reduced from whatever URL the actor returned. */
+  handle: string;
+  /** The exact URL the actor returned, for a "check it" link. */
+  url: string;
+  /** False for YouTube, LinkedIn, Threads… — shown, never written. */
+  monitorable: boolean;
+}
+
+/** The result of one website contacts read, in every state it can be in. */
+export interface ContactDiscoveryResult {
+  /**
+   * `unavailable` is a configuration state, not a failure: with no actor id on
+   * the deployment the surface explains itself instead of erroring.
+   */
+  status: "done" | "running" | "failed" | "unavailable";
+  /** Present when a run is still working, so the next call can collect it. */
+  runId?: string;
+  competitorId?: string;
+  /** The website that was read. */
+  scannedUrl: string;
+  suggestions: SocialSuggestion[];
+  /** Labels for what the actor found that we have no actor to scrape. */
+  unmonitored: string[];
+  costUsd?: number;
+  /**
+   * True when these proposals come from a read taken moments ago rather than a
+   * new one — the reuse window doing its job, so nothing was re-charged.
+   */
+  cached?: boolean;
+  /** Why the feature is unavailable, when that is the status. */
+  reason?: string;
+}
+
 /** A source the user is watching, collected during onboarding. */
 export interface MonitoringSourceInput {
   name: string;
   website: string;
   category: string;
   cadence: Cadence;
+  /**
+   * The competitor's social profiles, if the user recorded any. Optional so an
+   * existing saved form (and every supplier row) stays valid without it.
+   */
+  socials?: CompetitorSocialInput[];
+}
+
+/**
+ * What the competitor add/edit form collects. Deliberately not `Competitor`:
+ * the server owns everything else (metrics, ratings, last scan), and a form that
+ * could PATCH a metric would be a bug waiting to happen.
+ */
+export interface CompetitorInput {
+  name: string;
+  website: string;
+  cadence: Cadence;
+  notes?: string;
+}
+
+/** What the supplier add/edit form collects. Same reasoning as `CompetitorInput`. */
+export interface SupplierInput {
+  name: string;
+  website: string;
+  category?: string;
+  cadence: Cadence;
+  leadTimeDays?: number;
+  notes?: string;
 }
 
 export interface ClientSeedInput {
@@ -800,6 +906,11 @@ export interface ProviderStatus {
   errors: number;
   /** Monthly unit allowance, 0 when uncapped. */
   cap: number;
+  /**
+   * Features this provider could serve that are switched off on this deployment
+   * (e.g. website discovery without `APIFY_CONTACTS_ACTOR_ID`), as ready copy.
+   */
+  inactiveFeatures: string[];
   /** Monthly dollar allowance, 0 when uncapped. */
   capUsd: number;
 }

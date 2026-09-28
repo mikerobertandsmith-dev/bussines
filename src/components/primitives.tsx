@@ -464,12 +464,65 @@ export function Td({ children, className = "" }: { children?: ReactNode; classNa
   return <td className={`px-3 py-2.5 text-sm text-slate-700 ${className}`}>{children}</td>;
 }
 
-export function EmptyState({ title, hint }: { title: string; hint?: string }) {
+export function EmptyState({
+  title,
+  hint,
+  action,
+}: {
+  title: string;
+  hint?: string;
+  /** The way out of the empty state — a page with nothing on it should not be a dead end. */
+  action?: ReactNode;
+}) {
   return (
     <div className="px-4 py-10 text-center">
       <p className="text-sm font-medium text-slate-700">{title}</p>
       {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
+      {action ? <div className="mt-3 flex justify-center">{action}</div> : null}
     </div>
+  );
+}
+
+/**
+ * A destructive action that takes two clicks: the first arms it, the second
+ * performs it.
+ *
+ * It guards the removal of a watched source, and those deletes cascade —
+ * removing a competitor takes its scans, keywords, posts and reviews with it,
+ * and there is no undo. So the first click only states the intent; the copy
+ * around the button is where the collateral is named.
+ */
+export function ConfirmButton({
+  label,
+  confirmLabel,
+  icon,
+  busy = false,
+  onConfirm,
+  className = "",
+}: {
+  label: string;
+  /** What the button says once armed — never the same as `label`, so the state is visible. */
+  confirmLabel: string;
+  icon?: ReactNode;
+  busy?: boolean;
+  onConfirm: () => void;
+  className?: string;
+}) {
+  const [armed, setArmed] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => (armed ? onConfirm() : setArmed(true))}
+      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+        armed
+          ? "bg-rose-600 text-white hover:bg-rose-700"
+          : "border border-rose-300 bg-white text-rose-700 hover:bg-rose-50"
+      } ${className}`}
+    >
+      {icon}
+      {armed ? confirmLabel : label}
+    </button>
   );
 }
 

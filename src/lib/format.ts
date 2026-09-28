@@ -89,6 +89,33 @@ export function domainFromUrl(url: string): string {
   }
 }
 
+/**
+ * A website as it should be stored and requested, from however someone typed it.
+ *
+ * `supplier.com`, `https://supplier.com/` and `https://supplier.com/wholesale`
+ * all become `https://supplier.com`. Normalising in one place is what keeps the
+ * onboarding step, the add/edit forms and the scrape input in agreement — and it
+ * is about the *request* being valid, not about display (`domainFromUrl` above
+ * is the display side).
+ *
+ * Only the host is kept: a catalogue path points a site scan at one page rather
+ * than the site, and a query or fragment can point it somewhere unintended.
+ * Returns "" when there is nothing usable, so callers can reject it rather than
+ * store a string no scan can open — the same reason a handle is normalized before
+ * it becomes a billed target.
+ */
+export function normaliseWebsite(value: string): string {
+  const raw = (value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    // A host is the one thing a URL cannot be useful without.
+    return url.hostname ? `${url.protocol}//${url.host}` : "";
+  } catch {
+    return "";
+  }
+}
+
 export function titleCase(value: string): string {
   return value
     .split("_")
