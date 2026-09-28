@@ -271,7 +271,10 @@ export function buildProviderStatus(input: {
       inactiveFeatures: config?.inactiveFeatures ?? [],
       connections: counts.get(provider) ?? 0,
       requests: totals?.requests ?? 0,
-      costUsd: Number((totals?.costUsd ?? 0).toFixed(2)),
+      // Rounded to six decimals, not two: the AI drafting rows cost thousandths
+      // of a cent each, and rounding the total to cents erases them — the panel
+      // then reports real spend as $0.00.
+      costUsd: Number((totals?.costUsd ?? 0).toFixed(6)),
       units: totals?.units ?? 0,
       errors: totals?.errors ?? 0,
       cap: config?.cap ?? 0,

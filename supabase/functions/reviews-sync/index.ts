@@ -11,6 +11,7 @@ import {
   DEFAULT_MAX_REVIEWS,
   collectReviewScrape,
   fetchReviews,
+  googleReviewSearchCost,
   needsPlaceLookup,
   platformLabelOf,
   readReviewScrape,
@@ -107,6 +108,20 @@ Deno.serve(async (req) => {
 
     const connections = (connectionRows ?? []) as ConnectionRow[];
     if (!connections.length) {
+      // Only `status = 'active'` rows reach a sync, so an empty list means either
+      // nothing is connected or everything connected needs attention. Saying
+      // "nothing is connected" in the second case sends the user to add a profile
+      // they already have, so the two are told apart here.
+      const { count } = await db
+        .from("review_connections")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId);
+      if (count) {
+        throw new HttpError(
+          409,
+          `${count} review profile${count === 1 ? " needs" : "s need"} reconnecting before it can sync. Remove and re-add it on Social & reviews.`,
+        );
+      }
       throw new HttpError(
         409,
         "No review profiles connected yet. Add your Google, Trustpilot or Yelp page, then sync again.",
@@ -150,8 +165,12 @@ Deno.serve(async (req) => {
       const label = connection.label || platformLabelOf(connection.platform);
       const reader = readerFor(connection.platform);
       // A name or URL costs one extra search to resolve into the id the reader
-      // wants, so it is budgeted for before the call rather than after.
-      const searches = 1 + (reader === "serpapi" && needsPlaceLookup(connection.platform, connection.handle) ? 1 : 0);
+      // wants, and a Google read walks up to three pages of 8. Budgeted with the
+      // worst case before the call rather than discovered after it.
+      const searches =
+        reader === "serpapi" && connection.platform.trim().toLowerCase() === "google"
+          ? googleReviewSearchCost(connection.handle, limit)
+          : 1 + (reader === "serpapi" && needsPlaceLookup(connection.platform, connection.handle) ? 1 : 0);
 
       try {
         let reviews: SyncedReview[];
@@ -181,8 +200,10 @@ Deno.serve(async (req) => {
           endpoint = "actor-runs";
         } else {
           await assertReaderBudget(db, businessId, reader, searches);
-          reviews = await fetchReviews(connection.platform, connection.handle, limit);
-          units = searches;
+          const outcome = await fetchReviews(connection.platform, connection.handle, limit);
+          reviews = outcome.reviews;
+          // What the read actually cost, not the ceiling it was budgeted against.
+          units = outcome.searches;
           costUsd = 0;
           endpoint = `reviews:${connection.platform}`;
         }
@@ -209,21 +230,22 @@ Deno.serve(async (req) => {
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "The review sync failed.";
         errors.push(`${label}: ${message}`);
-        // Not every failure is the connection's fault. A budget refusal (429) and a
-        // provider-side scrape failure (5xx from Apify — a run that ended FAILED, or
-        // never returned an id) are transient. Marking those `needs_reauth` would
-        // drop the profile out of every later sync, which only reads `status =
-        // 'active'`, and tell the user to reconnect a healthy row. The in-flight run
-        // was cleared before collecting, so the next sync just tries again.
-        const transient =
-          cause instanceof HttpError &&
-          (cause.status === 429 || (reader === "apify" && cause.status >= 500));
+        // Only a *credential* refusal means the profile has to be reconnected by
+        // hand. Everything else — a rate limit, a provider outage, or a request the
+        // provider rejected (a 400 from a parameter rule, say) — is transient or
+        // fixable in code. Marking those `needs_reauth` would drop the profile out
+        // of every later sync, which only reads `status = 'active'`, and tell the
+        // user to reconnect a healthy row. Keeping it active retries next sync, and
+        // the error stays on the row for the UI to show.
+        const providerStatus =
+          cause instanceof HttpError ? (cause.providerStatus ?? cause.status) : 0;
+        const needsReconnect = providerStatus === 401 || providerStatus === 403;
         await db
           .from("review_connections")
           .update(
-            transient
-              ? { last_error: message.slice(0, 300) }
-              : { last_error: message.slice(0, 300), status: "needs_reauth" },
+            needsReconnect
+              ? { last_error: message.slice(0, 300), status: "needs_reauth" }
+              : { last_error: message.slice(0, 300) },
           )
           .eq("id", connection.id);
       }
@@ -251,11 +273,15 @@ Deno.serve(async (req) => {
       };
       // Only ever upgrade reply state here: the provider is the source of truth
       // for its own replies, but our own sent reply must survive until it catches up.
-      if (review.replied || prior?.replied) {
-        row.replied = true;
-        row.reply_text = review.replyText || prior?.replyText || "";
-        row.replied_at = prior?.repliedAt ?? review.postedAt ?? null;
-      }
+      //
+      // Written unconditionally, never as an `if` that adds the keys to some rows
+      // only. A bulk upsert pads every key a row omits with NULL, and `replied`
+      // and `reply_text` are NOT NULL — so one replied review in the batch would
+      // fail the insert for all the others.
+      const hasReply = review.replied || prior?.replied === true;
+      row.replied = hasReply;
+      row.reply_text = hasReply ? review.replyText || prior?.replyText || "" : "";
+      row.replied_at = hasReply ? (prior?.repliedAt ?? review.postedAt ?? null) : null;
       return row;
     });
 
@@ -274,6 +300,9 @@ Deno.serve(async (req) => {
       source_name: "Review sync",
       status: errors.length && !synced ? "failed" : "succeeded",
       changes_found: payload.length,
+      // The reason, not just the fact: the health panel shows this text, and a
+      // null error leaves it guessing ("the provider did not return a result").
+      error: errors.length ? errors.slice(0, 3).join(" · ").slice(0, 500) : null,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
     });

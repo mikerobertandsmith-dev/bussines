@@ -78,6 +78,7 @@ export function BusinessPage() {
     geoVisibility,
     weeklyReports,
     buyList,
+    competitors,
   } = workspace;
 
   const [tab, setTab] = useState<BusinessTab>("overview");
@@ -100,13 +101,35 @@ export function BusinessPage() {
   // Share of Voice is the same for the tenant across competitors; take the first row.
   const sov = shareOfVoice[0];
 
+  /**
+   * How many keywords the scan would actually look up.
+   *
+   * Mirrors the gateway's resolution order — our own tracked terms first, then a
+   * competitor's — because `serp-scan` refuses with a 409 when the total is zero.
+   * The button checked this itself so the refusal is explained in the page's own
+   * words, next to the control that fixes it, rather than arriving as a bare
+   * error after a round trip.
+   */
+  const trackedKeywordCount =
+    topSeoKeywords.length +
+    competitors.reduce((sum, competitor) => sum + competitor.keywordGap.length, 0);
+
   async function scanSearch() {
+    if (mode === "demo") {
+      // Sample rankings already stand in; there is nothing to look up.
+      toast("Demo mode — showing the sample scan. Add SERPAPI_KEY to run a live scan.");
+      return;
+    }
+    if (trackedKeywordCount === 0) {
+      toast(
+        "There are no keywords to scan yet. Save a few with “Find keywords”, then run the scan.",
+      );
+      return;
+    }
     setScanning(true);
     try {
       const result = await actions.runSerpScan();
-      if (mode === "demo") {
-        toast("Demo mode — showing the sample scan. Add SERPAPI_KEY to run a live scan.");
-      } else if (result?.capped) {
+      if (result?.capped) {
         toast(
           `Scanned ${result.keywords} keyword${result.keywords === 1 ? "" : "s"} — this workspace has used its SerpApi budget for the month.`,
         );

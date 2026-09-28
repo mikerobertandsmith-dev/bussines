@@ -112,6 +112,7 @@ function demoSocialChannel(
   platform: string,
   handle: string,
   source: SocialChannel["source"] = "manual",
+  followers = 0,
 ): SocialChannel {
   const normalised = normaliseSocialHandle(handle);
   if (!normalised) {
@@ -120,7 +121,7 @@ function demoSocialChannel(
   return {
     platform: socialPlatformOf(platform) ?? platform.trim().toLowerCase(),
     handle: normalised,
-    followers: 0,
+    followers: Number.isFinite(followers) && followers > 0 ? followers : 0,
     engagementRate: 0,
     postsPerWeek: 0,
     adsRunning: 0,
@@ -338,6 +339,12 @@ export interface WorkspaceActions {
     competitorId: string;
     platform: string;
     handle: string;
+    /**
+     * The profile's follower count, when the person knows it. The dataset is
+     * authoritative and overwrites this on the next scan; supplying it here is
+     * what gives engagement a denominator before that scan has run.
+     */
+    followers?: number;
   }) => Promise<void>;
   /** Stops monitoring one competitor handle. */
   removeCompetitorSocial: (input: { competitorId: string; platform: string }) => Promise<void>;
@@ -737,7 +744,7 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
         return null;
       },
       async saveCompetitorSocial(input) {
-        const channel = demoSocialChannel(input.platform, input.handle);
+        const channel = demoSocialChannel(input.platform, input.handle, "manual", input.followers ?? 0);
         patchData((current) => ({
           ...current,
           competitors: current.competitors.map((c) =>

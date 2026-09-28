@@ -96,6 +96,35 @@ export function normaliseSocialHandle(input: string): string {
   return handle;
 }
 
+/**
+ * A follower count typed the way it is read off a profile: `184000`, `184k`,
+ * `1.2m`, with or without thousands separators.
+ *
+ * A blank box means "unknown" — no `followers`, no `error` — because an empty
+ * field must never be written as 0 over a count the last scan measured. Anything
+ * non-blank that will not parse comes back as an `error` to show, rather than
+ * being silently dropped: a typo that saves a wrong denominator is worse than a
+ * refusal.
+ */
+export function parseFollowerCount(input: string): { followers?: number; error?: string } {
+  const trimmed = input.trim().replace(/[,\s_]/g, "");
+  if (!trimmed) return {};
+
+  const match = /^(\d+(?:\.\d+)?)(k|m)?$/i.exec(trimmed);
+  if (!match) {
+    return { error: "Enter the follower count as a number — for example 184000, 184k or 1.2m." };
+  }
+
+  const scale = match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2] ? 1_000 : 1;
+  const followers = Math.round(Number(match[1]) * scale);
+  // The column is a 4-byte integer, so an absurd entry is refused here rather
+  // than failing the save with a database error.
+  if (!Number.isFinite(followers) || followers < 0 || followers > 2_147_483_647) {
+    return { error: "That follower count is out of range." };
+  }
+  return { followers };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function postedTime(post: SocialPost): number {
@@ -217,6 +246,55 @@ export function summariseSocial(
       .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
       .slice(0, 5),
     latestPostAt: latest ? new Date(latest).toISOString() : null,
+  };
+}
+
+/**
+ * One monitored channel's volume and engagement, for the Social presence cards.
+ *
+ * Derived rather than read from `competitor_social`, which carries
+ * `engagement_rate` and `posts_per_week` columns that nothing ever writes — so
+ * those columns are always 0 and a card built on them reports 0% for a profile
+ * whose posts plainly have engagement. This module's contract is that these
+ * numbers are never stored, precisely so a panel cannot drift from the rows
+ * behind it.
+ */
+export interface ChannelSocialInsight {
+  /** Posts scraped for this competitor on this platform. */
+  posts: number;
+  /** Posts per week averaged over the window. */
+  postsPerWeek: number;
+  /** Mean engagement rate of the posts inside the window, as a percentage. */
+  averageEngagement: number;
+}
+
+export function summariseChannelSocial(
+  posts: SocialPost[],
+  competitorId: string,
+  platform: string,
+  now: Date = new Date(),
+  windowDays = 30,
+): ChannelSocialInsight {
+  const key = socialPlatformKey(platform);
+  const theirs = posts.filter(
+    (post) => post.competitorId === competitorId && socialPlatformKey(post.platform) === key,
+  );
+  if (!theirs.length) return { posts: 0, postsPerWeek: 0, averageEngagement: 0 };
+
+  const windowStart = now.getTime() - windowDays * DAY_MS;
+  const inWindow = theirs.filter((post) => {
+    const at = postedTime(post);
+    return Number.isFinite(at) && at >= windowStart;
+  });
+
+  return {
+    posts: theirs.length,
+    postsPerWeek: Number((inWindow.length / (windowDays / 7)).toFixed(1)),
+    averageEngagement: inWindow.length
+      ? Number(
+          (inWindow.reduce((sum, post) => sum + post.engagementRate, 0) / inWindow.length).toFixed(2),
+        )
+      : 0,
   };
 }
 

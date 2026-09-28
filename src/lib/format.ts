@@ -48,6 +48,34 @@ export function money(value: number): string {
   });
 }
 
+/**
+ * A dollar figure that stays honest from whole dollars down to a fraction of a
+ * cent.
+ *
+ * `money()` rounds to two decimals, which is right for a price and wrong for a
+ * usage ledger: the AI drafting rows cost thousandths of a cent each, so a panel
+ * built on `money()` reports real spend as `$0.00` and reads as "nothing was
+ * charged". Amounts under a cent therefore keep just enough decimals to show
+ * their leading significant digits, with trailing zeros trimmed.
+ */
+export function usd(value: number): string {
+  const amount = Number.isFinite(value) ? value : 0;
+  if (amount === 0) return "$0.00";
+
+  const magnitude = Math.abs(amount);
+  if (magnitude >= 0.01) return `$${amount.toFixed(2)}`;
+
+  // ~3 significant figures below a cent, then trim the padding: $0.00055600 →
+  // $0.000556. Two decimals are always kept so a rounded-up figure still reads
+  // as currency rather than a bare fraction.
+  const decimals = Math.min(8, Math.max(2, 3 - Math.floor(Math.log10(magnitude))));
+  const fixed = amount.toFixed(decimals).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  // Too small for even eight decimals to show: say so rather than print `$0`,
+  // which is the very reading this formatter exists to avoid.
+  if (Number(fixed) === 0) return "$<0.00000001";
+  return `$${fixed}`;
+}
+
 export function compact(value: number): string {
   return value.toLocaleString(undefined, {
     notation: "compact",

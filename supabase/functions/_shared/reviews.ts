@@ -66,6 +66,17 @@ export const REVIEW_PLATFORMS = Object.keys(PLATFORM_LABELS) as ReviewPlatform[]
 export const DEFAULT_MAX_REVIEWS = 20;
 const MAX_REVIEWS_PER_CALL = 20;
 
+/** What one page of the Google Maps reviews engine returns. */
+const GOOGLE_REVIEWS_PER_PAGE = 8;
+/**
+ * Pages one Google review read walks at most.
+ *
+ * The engine returns 8 reviews a page, so filling the default 20 takes three
+ * searches. The cap bounds what a single sync can spend when a listing has
+ * thousands of reviews and the caller asked for more than one page.
+ */
+const MAX_REVIEW_PAGES = 3;
+
 /**
  * Review reading is possible as soon as *either* reader is configured: Google and
  * TripAdvisor reviews ride on SerpApi, everything else on Apify. There is no
@@ -422,27 +433,61 @@ export function needsPlaceLookup(platform: string, handle: string): boolean {
 
 /* ---------------------------------------------------------------- reading */
 
-/** Reviews for one monitored profile, newest first. */
+/**
+ * The most SerpApi searches one Google review read can cost: the pages it walks
+ * plus the one extra search a name or URL costs to resolve into a place id.
+ *
+ * The caller budgets with this rather than the old flat one, so a read is never
+ * started on an allowance it cannot pay for.
+ */
+export function googleReviewSearchCost(handle: string, limit = DEFAULT_MAX_REVIEWS): number {
+  const wanted = Math.min(MAX_REVIEWS_PER_CALL, Math.max(1, limit));
+  const pages = Math.min(MAX_REVIEW_PAGES, Math.max(1, Math.ceil(wanted / GOOGLE_REVIEWS_PER_PAGE)));
+  return pages + (needsPlaceLookup("google", handle) ? 1 : 0);
+}
+
+/**
+ * Reviews for one monitored profile, newest first, with what the read cost in
+ * provider searches — the caller records that figure, so the usage panel shows
+ * what was spent rather than what was reserved.
+ */
 export async function fetchReviews(
   platform: string,
   handle: string,
   limit = DEFAULT_MAX_REVIEWS,
-): Promise<SyncedReview[]> {
+): Promise<{ reviews: SyncedReview[]; searches: number }> {
   const normalisedPlatform = platform.trim().toLowerCase();
   const wanted = Math.min(MAX_REVIEWS_PER_CALL, Math.max(1, limit));
 
   if (normalisedPlatform === "google") {
     requireEnv("SERPAPI_KEY");
     const place = await resolveGooglePlace(handle);
-    const response = await serpApi({
-      engine: "google_maps_reviews",
-      ...place,
-      sort_by: "newestFirst",
-      num: wanted,
-      hl: "en",
-    });
-    const raw = (response.reviews ?? []).map(mapGoogleReview);
-    return normaliseReviews({ reviews: raw }, "google");
+    // `num` is only legal on this engine alongside a page token: SerpApi rejects
+    // it on the first page ("it always returns 8 results"), which used to fail
+    // every Google sync outright with a 400. So the first call sends none, and
+    // each later page asks for what is still missing.
+    const raw: Record<string, unknown>[] = [];
+    let nextPageToken = "";
+    let pages = 0;
+    for (let page = 0; page < MAX_REVIEW_PAGES && raw.length < wanted; page += 1) {
+      const response = await serpApi({
+        engine: "google_maps_reviews",
+        ...place,
+        sort_by: "newestFirst",
+        hl: "en",
+        ...(nextPageToken ? { next_page_token: nextPageToken, num: wanted } : {}),
+      });
+      pages += 1;
+      raw.push(...(response.reviews ?? []));
+      nextPageToken = String(response.serpapi_pagination?.next_page_token ?? "");
+      if (!nextPageToken) break;
+    }
+
+    const reviews = normaliseReviews(
+      { reviews: raw.slice(0, wanted).map(mapGoogleReview) },
+      "google",
+    );
+    return { reviews, searches: pages + (needsPlaceLookup("google", handle) ? 1 : 0) };
   }
 
   if (normalisedPlatform === "tripadvisor") {
@@ -455,11 +500,12 @@ export async function fetchReviews(
       limit: wanted,
     });
     const raw = (response.reviews ?? []).map(mapTripadvisorReview);
-    return normaliseReviews({ reviews: raw }, "tripadvisor");
+    const reviews = normaliseReviews({ reviews: raw }, "tripadvisor");
+    return { reviews, searches: 1 + (needsPlaceLookup("tripadvisor", handle) ? 1 : 0) };
   }
 
   const run = await startReviewScrape(normalisedPlatform, handle, wanted);
-  return await collectReviewScrape(normalisedPlatform, run, wanted);
+  return { reviews: await collectReviewScrape(normalisedPlatform, run, wanted), searches: 1 };
 }
 
 /* ------------------------------------------------------------- actor runs */

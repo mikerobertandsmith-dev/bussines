@@ -1,8 +1,8 @@
 import type { RouteId } from "./hooks";
-import type { WorkspaceData } from "./types";
-import { money, relativeTime } from "./format";
+import type { IntegrationProvider, ScanRun, WorkspaceData } from "./types";
+import { money, relativeTime, titleCase, usd } from "./format";
 import { platformLabel, summariseSocial } from "./social";
-import { providerUsage } from "./integrations";
+import { PROVIDER_CATALOG, providerUsage, type WorkspaceHealth } from "./integrations";
 
 export interface Alert {
   id: string;
@@ -220,9 +220,11 @@ export function buildAlerts(data: WorkspaceData): Alert[] {
     const { pct, capped } = providerUsage(provider);
     if (!capped || pct < 80) continue;
 
+    // `usd`, not a fixed two decimals: a spend cap can be under a cent, and its
+    // usage rounds to $0.00 either way.
     const spend = provider.cap > 0
       ? `${provider.units} of ${provider.cap} monthly units used`
-      : `$${provider.costUsd.toFixed(2)} of $${provider.capUsd.toFixed(2)} monthly spend used`;
+      : `${usd(provider.costUsd)} of ${usd(provider.capUsd)} monthly spend used`;
 
     list.push({
       id: `alert-budget-${provider.provider}`,
@@ -271,6 +273,86 @@ export function buildAlerts(data: WorkspaceData): Alert[] {
   return list
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
     .map((a) => ({ ...a, detail: `${relativeTime(a.at)} · ${a.detail}` }));
+}
+
+/** Which page raises a scan, so its failure can link to where it is re-run. */
+const SCAN_PAGE: Record<ScanRun["sourceType"], RouteId> = {
+  supplier: "suppliers",
+  competitor: "competition",
+  social: "competition",
+  seo: "business",
+  geo: "business",
+  reviews: "social",
+};
+
+/**
+ * Which page owns a connection's remove-and-re-add affordance.
+ *
+ * A rejected credential is only fixable where the connection actually lives — a
+ * review profile on Social & reviews, a publishing account on Promotions — so the
+ * alert points at that page rather than at a generic settings screen the user
+ * then has to search.
+ */
+const RECONNECT_PAGE: Partial<Record<IntegrationProvider, RouteId>> = {
+  reviews: "social",
+  mallary: "promotion",
+};
+
+/**
+ * Failed scans and rejected connections, as notifications.
+ *
+ * The Monitoring health panel in business settings already reports both, but it
+ * sits behind two clicks and only speaks when someone opens it — which is how a
+ * scan can fail for days without anyone noticing. Surfacing the same rows on the
+ * Notifications page puts them where the sidebar badge already points, each with
+ * the page that can fix it.
+ *
+ * Reads `WorkspaceHealth`, so it costs no provider calls.
+ */
+export function buildHealthAlerts(health: WorkspaceHealth): Alert[] {
+  const list: Alert[] = [];
+
+  for (const run of health.failedScans) {
+    list.push({
+      id: `alert-scan-failed-${run.id}`,
+      page: SCAN_PAGE[run.sourceType] ?? "business",
+      title: `${run.sourceName || `${titleCase(run.sourceType)} scan`} failed`,
+      detail:
+        run.error ||
+        "The provider did not return a result. Re-run the scan to see whether it was a one-off.",
+      at: run.startedAt,
+      severity: "urgent",
+    });
+  }
+
+  // A reconnect need has no timestamp of its own — it is a property of the
+  // connection right now, not an event — so it is stamped as current and sorts
+  // to the top of the list, which is where an "urgent" item belongs.
+  const now = new Date().toISOString();
+  for (const item of health.needsReconnect) {
+    list.push({
+      id: `alert-reconnect-${item.provider}-${item.label}`,
+      page: RECONNECT_PAGE[item.provider] ?? "business",
+      title: `${item.label} needs reconnecting`,
+      detail: `${PROVIDER_CATALOG[item.provider].label} rejected the saved credentials. Remove and re-add the connection to resume monitoring.`,
+      at: now,
+      severity: "urgent",
+    });
+  }
+
+  return list
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    .map((a) => ({ ...a, detail: `${relativeTime(a.at)} · ${a.detail}` }));
+}
+
+/**
+ * One newest-first notification list from the data-derived and health alerts, so
+ * a badge that counts one list counts them all.
+ */
+export function mergeAlerts(...lists: Alert[][]): Alert[] {
+  return lists
+    .flat()
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
 }
 
 export function alertsFor(data: WorkspaceData, page: RouteId): Alert[] {

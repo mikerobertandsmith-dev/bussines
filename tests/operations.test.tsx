@@ -6,7 +6,8 @@ import {
   providerUsage,
   usageLevel,
 } from "../src/lib/integrations";
-import { buildAlerts } from "../src/lib/alerts";
+import { buildAlerts, buildHealthAlerts, mergeAlerts } from "../src/lib/alerts";
+import { usd } from "../src/lib/format";
 import { sampleWorkspace } from "../src/data/sample";
 import {
   PROVIDER_LABELS,
@@ -378,6 +379,137 @@ describe("budget alerts", () => {
     expect(
       buildAlerts(sampleWorkspace()).some((alert) => alert.id.startsWith("alert-budget-")),
     ).toBe(false);
+  });
+});
+
+describe("usage cost formatting", () => {
+  it("shows whole dollars to the cent", () => {
+    expect(usd(0)).toBe("$0.00");
+    expect(usd(4.4)).toBe("$4.40");
+    expect(usd(12)).toBe("$12.00");
+  });
+
+  it("keeps a real figure visible below a cent instead of rounding it to zero", () => {
+    // The AI drafting rows cost thousandths of a cent each: two decimals would
+    // report real spend as "$0.00", which reads as "we were never charged".
+    expect(usd(0.000556)).toBe("$0.000556");
+    expect(usd(0.005)).toBe("$0.005");
+    expect(usd(0.0121)).toBe("$0.01");
+  });
+
+  it("says an amount is too small to show rather than printing $0", () => {
+    expect(usd(1e-12)).toBe("$<0.00000001");
+  });
+
+  it("keeps six decimals through the provider totals, not two", () => {
+    const [llm] = buildProviderStatus({
+      connections: [],
+      usage: [{ provider: "llm", requests: 2, units: 1_586, costUsd: 0.000556, errors: 0 }],
+      config: {},
+    }).filter((provider) => provider.provider === "llm");
+
+    expect(llm.costUsd).toBe(0.000556);
+    expect(usd(llm.costUsd)).toBe("$0.000556");
+  });
+});
+
+describe("monitoring notifications", () => {
+  const empty = {
+    scanRuns: [],
+    integrationConnections: [],
+    reviewConnections: [],
+    socialAccounts: [],
+  };
+
+  it("surfaces a failed scan on the page that re-runs it, with the provider's reason", () => {
+    const health = buildWorkspaceHealth({
+      ...empty,
+      scanRuns: [
+        scanRun({
+          id: "run-1",
+          sourceType: "social",
+          sourceName: "Competitor social scan",
+          error: "instagram sephora: the actor run timed out",
+          startedAt: daysBeforeNow(1),
+        }),
+      ],
+      now: NOW,
+    });
+
+    const [alert] = buildHealthAlerts(health);
+    expect(alert).toMatchObject({
+      id: "alert-scan-failed-run-1",
+      page: "competition",
+      severity: "urgent",
+    });
+    expect(alert.title).toBe("Competitor social scan failed");
+    expect(alert.detail).toContain("the actor run timed out");
+  });
+
+  it("names a scan that recorded no name, and explains a missing reason", () => {
+    const health = buildWorkspaceHealth({
+      ...empty,
+      scanRuns: [scanRun({ id: "run-2", sourceName: "", error: null, startedAt: daysBeforeNow(1) })],
+      now: NOW,
+    });
+
+    const [alert] = buildHealthAlerts(health);
+    // Not "Reviews scan scan failed", and not a blank body.
+    expect(alert.title).toBe("Reviews scan failed");
+    expect(alert.detail).toContain("did not return a result");
+  });
+
+  it("sends a rejected review profile to Social & reviews, where it is reconnected", () => {
+    const health = buildWorkspaceHealth({
+      ...empty,
+      reviewConnections: [
+        {
+          id: "c2",
+          provider: "reviews",
+          platform: "google",
+          handle: "yourretailbrand",
+          label: "Google reviews",
+          status: "needs_reauth",
+          lastSyncedAt: null,
+          lastError: "401",
+          createdAt: NOW.toISOString(),
+        },
+      ],
+      now: NOW,
+    });
+
+    const [alert] = buildHealthAlerts(health);
+    expect(alert).toMatchObject({ page: "social", severity: "urgent" });
+    expect(alert.title).toBe("Google reviews needs reconnecting");
+    expect(alert.detail).toContain("rejected the saved credentials");
+  });
+
+  it("adds nothing when every scan is healthy and every connection is authorised", () => {
+    const health = buildWorkspaceHealth({
+      ...empty,
+      scanRuns: [scanRun({ id: "ok", status: "succeeded" })],
+      now: NOW,
+    });
+
+    expect(buildHealthAlerts(health)).toEqual([]);
+  });
+
+  it("merges both alert lists into one newest-first list", () => {
+    const health = buildWorkspaceHealth({
+      ...empty,
+      scanRuns: [scanRun({ id: "run-1", startedAt: daysBeforeNow(3) })],
+      now: NOW,
+    });
+    // One data alert, dated before the failed scan, so ordering is observable.
+    const data = sampleWorkspace();
+    data.providerStatus = [status({ provider: "serpapi", units: 250, cap: 250, requests: 260 })];
+
+    const merged = mergeAlerts(buildAlerts(data), buildHealthAlerts(health));
+    expect(merged.some((alert) => alert.id === "alert-scan-failed-run-1")).toBe(true);
+    expect(merged.some((alert) => alert.id === "alert-budget-serpapi")).toBe(true);
+
+    const times = merged.map((alert) => new Date(alert.at).getTime());
+    expect(times).toEqual([...times].sort((a, b) => b - a));
   });
 });
 

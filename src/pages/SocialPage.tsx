@@ -29,7 +29,7 @@ import {
 import { Modal } from "../components/Modal";
 import { AreaChart, DeltaPill, Stars } from "../components/charts";
 import { useActionToast, useToast } from "../components/Toast";
-import { platformLabel, summariseSocial } from "../lib/social";
+import { platformLabel, summariseChannelSocial, summariseSocial } from "../lib/social";
 import { compact, relativeTime, shortDate } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
 import type { Competitor, MyReview } from "../lib/types";
@@ -642,20 +642,33 @@ export function SocialPage() {
                       <p className="mt-1 text-[11px] text-slate-500">No social data captured yet.</p>
                     ) : (
                       <ul className="mt-1.5 space-y-1.5">
-                        {c.social.map((ch) => (
-                          <li
-                            key={`${c.id}-${ch.platform}`}
-                            className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600"
-                          >
-                            <span className="font-medium text-slate-800">{ch.platform}</span>
-                            <span>{compact(ch.followers)} followers</span>
-                            <span>{ch.engagementRate}% eng.</span>
-                            <span>{ch.postsPerWeek} posts/wk</span>
-                            {ch.adsRunning > 0 ? (
-                              <Badge tone="warn">{ch.adsRunning} ads</Badge>
-                            ) : null}
-                          </li>
-                        ))}
+                        {c.social.map((ch) => {
+                          // Derived exactly as the Competition cards and the
+                          // summary line above are: the channel row's stored rate
+                          // and cadence are never written, and reading them here
+                          // made this line contradict the one two rows up.
+                          const channel = summariseChannelSocial(socialPosts, c.id, ch.platform);
+                          return (
+                            <li
+                              key={`${c.id}-${ch.platform}`}
+                              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-600"
+                            >
+                              <span className="font-medium text-slate-800">{ch.platform}</span>
+                              <span>{ch.followers ? `${compact(ch.followers)} followers` : "— followers"}</span>
+                              <span>
+                                {ch.followers && channel.posts
+                                  ? `${channel.averageEngagement}% eng.`
+                                  : "— eng."}
+                              </span>
+                              <span>
+                                {channel.posts ? `${channel.postsPerWeek} posts/wk` : "— posts/wk"}
+                              </span>
+                              {ch.adsRunning > 0 ? (
+                                <Badge tone="warn">{ch.adsRunning} ads</Badge>
+                              ) : null}
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                   </li>

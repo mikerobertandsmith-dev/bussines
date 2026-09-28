@@ -12,6 +12,7 @@ import {
   actorFor,
   engagementRate,
   fetchDatasetItems,
+  followersFrom,
   inputFor,
   isTerminal,
   normalisePosts,
@@ -92,6 +93,12 @@ const MAX_TARGETS = 5;
 const DEFAULT_TARGETS = 2;
 const DEFAULT_MAX_ITEMS = 30;
 const MIN_CHARGE_USD = 0.01;
+/**
+ * Most posts one follower-count correction will restate in a single run. A cap
+ * keeps a workspace with a long post history from turning one scan into an
+ * unbounded write loop; the next run continues where this one stopped.
+ */
+const RESTATE_LIMIT = 500;
 /** How long we will wait across all the runs we started, in total. */
 const WAIT_BUDGET_MS = 90_000;
 
@@ -361,8 +368,14 @@ Deno.serve(async (req) => {
       business_id: businessId,
       source_type: "social",
       source_name: "Competitor social scan",
-      status: started.length && !errors.length ? "succeeded" : errors.length ? "failed" : "succeeded",
+      // A run that captured posts did its job even if one target errored; the
+      // per-target reason belongs on `error`, not on the status, or the health
+      // panel calls a working scan broken and hides the posts it did collect.
+      status: errors.length && !posts ? "failed" : "succeeded",
       changes_found: posts,
+      // The reason, not just the fact: the health panel shows this text, and a
+      // null error leaves it guessing ("the provider did not return a result").
+      error: errors.length ? errors.slice(0, 3).join(" · ").slice(0, 500) : null,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
     });
@@ -405,6 +418,31 @@ Deno.serve(async (req) => {
     const items = await fetchDatasetItems(run.defaultDatasetId, maxItems);
     const normalised = normalisePosts(items, target.platform);
 
+    // The scrape dataset is the only place a profile's follower count ever comes
+    // from, so it is read here and written back onto the monitored handle. This
+    // has to happen before the posts are mapped: the engagement rate is a ratio
+    // against this figure, and a stale zero makes every post read as 0%.
+    const followers = followersFrom(items);
+    if (followers !== null) {
+      if (followers !== target.followers) {
+        target.followers = followers;
+        const { error: followersError } = await db
+          .from("competitor_social")
+          .update({ followers })
+          .eq("business_id", businessId)
+          .eq("competitor_id", target.competitorId)
+          .eq("platform", target.platform);
+        if (followersError) throw new HttpError(500, followersError.message);
+      }
+
+      // Restated on every scan that learns a count, not only when the count
+      // changed. Posts captured before one was known are stored at 0%, and they
+      // disagree with the count now on file whatever this run's figure is —
+      // `restateEngagement` skips the rows already right, so the steady state
+      // costs one read and no writes.
+      await restateEngagement(target.competitorId, target.platform, followers);
+    }
+
     if (normalised.length) {
       const { error } = await db.from("social_posts").upsert(
         normalised.map((post) => ({
@@ -442,6 +480,42 @@ Deno.serve(async (req) => {
 
     await saveTarget(target, run, "");
     return normalised.length;
+  }
+
+  /**
+   * Recomputes the stored engagement rate for posts already on file.
+   *
+   * The rate is a ratio against the follower count, so the moment that count is
+   * corrected, every stored rate derived from the old one is wrong. Only the
+   * posts for this competitor and platform are touched, and only when the count
+   * actually changed — so a run that learns nothing new writes nothing.
+   */
+  async function restateEngagement(
+    competitorId: string,
+    platform: string,
+    followers: number,
+  ): Promise<void> {
+    const { data, error } = await db
+      .from("social_posts")
+      .select("id, likes, comments, engagement_rate")
+      .eq("business_id", businessId)
+      .eq("competitor_id", competitorId)
+      .eq("platform", platform)
+      // Newest first, so what the Social tab actually shows is corrected first
+      // when a workspace holds more posts than one run will restate.
+      .order("scraped_at", { ascending: false })
+      .limit(RESTATE_LIMIT);
+    if (error) throw new HttpError(500, error.message);
+
+    for (const row of data ?? []) {
+      const rate = engagementRate(Number(row.likes ?? 0), Number(row.comments ?? 0), followers);
+      if (Number(row.engagement_rate ?? 0) === rate) continue;
+      const { error: updateError } = await db
+        .from("social_posts")
+        .update({ engagement_rate: rate })
+        .eq("id", row.id);
+      if (updateError) throw new HttpError(500, updateError.message);
+    }
   }
 
   /** Upserts the scrape state for one handle. */

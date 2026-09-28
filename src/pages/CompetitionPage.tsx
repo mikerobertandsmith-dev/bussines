@@ -58,8 +58,12 @@ import {
   SOCIAL_PLATFORMS,
   isRecentPost,
   normaliseSocialHandle,
+  parseFollowerCount,
   platformLabel,
+  socialPlatformKey,
+  summariseChannelSocial,
   summariseSocial,
+  type ChannelSocialInsight,
 } from "../lib/social";
 import { useWorkspace, useWorkspaceData, type PromotionBriefInput } from "../lib/workspace";
 import type {
@@ -154,6 +158,8 @@ export function CompetitionPage() {
   const [handleOpen, setHandleOpen] = useState(false);
   const [handlePlatform, setHandlePlatform] = useState<string>(SOCIAL_PLATFORMS[0]);
   const [handleValue, setHandleValue] = useState("");
+  /** Optional follower count, so engagement has a denominator before the first scan. */
+  const [handleFollowers, setHandleFollowers] = useState("");
   /** The post whose angle picker is open, and the angles drafted for it. */
   const [anglePostId, setAnglePostId] = useState<string | null>(null);
   const [angles, setAngles] = useState<AdAngle[]>([]);
@@ -340,6 +346,29 @@ export function CompetitionPage() {
   // Competitor social, derived from the posts we actually scraped.
   const theirPosts = socialPosts.filter((post) => post.competitorId === competitor.id);
   const socialInsight = summariseSocial(socialPosts, competitor.id);
+
+  /**
+   * The follower count behind one platform's engagement rate, or 0 when it is
+   * not known yet. Engagement is a ratio against this figure, so a 0 here means
+   * "not measured" rather than "none" — and the two are shown differently.
+   */
+  function followersFor(platform: string): number {
+    const key = socialPlatformKey(platform);
+    return competitor.social.find((s) => socialPlatformKey(s.platform) === key)?.followers ?? 0;
+  }
+
+  // Volume and engagement per monitored platform, derived from the scraped posts
+  // once so every card reads the same figures the Cadence panel does.
+  const channelInsights = useMemo(() => {
+    const map = new Map<string, ChannelSocialInsight>();
+    for (const channel of competitor.social) {
+      map.set(
+        socialPlatformKey(channel.platform),
+        summariseChannelSocial(socialPosts, competitor.id, channel.platform),
+      );
+    }
+    return map;
+  }, [competitor.id, competitor.social, socialPosts]);
   const socialTarget = socialTargets.find((target) => target.competitorId === competitor.id);
 
   const sovComparison = [
@@ -369,8 +398,19 @@ export function CompetitionPage() {
 
   async function saveHandle() {
     if (!competitor) return;
+    const parsed = parseFollowerCount(handleFollowers);
+    if (parsed.error) {
+      toast(parsed.error);
+      return;
+    }
     await actionToast(
-      () => actions.saveCompetitorSocial({ competitorId: competitor.id, platform: handlePlatform, handle: handleValue }),
+      () =>
+        actions.saveCompetitorSocial({
+          competitorId: competitor.id,
+          platform: handlePlatform,
+          handle: handleValue,
+          followers: parsed.followers,
+        }),
       {
         success: `${platformLabel(handlePlatform)} handle saved — the next social scan will pull it.`,
         failure: "That handle could not be saved.",
@@ -378,6 +418,7 @@ export function CompetitionPage() {
     );
     setHandleOpen(false);
     setHandleValue("");
+    setHandleFollowers("");
   }
 
   /** Opens the form on a blank competitor, starting from the cadence in view. */
@@ -1391,9 +1432,11 @@ export function CompetitionPage() {
                           {post.caption || "No caption"}
                         </p>
                         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-                          <span className="font-medium text-slate-700">
-                            {post.engagementRate}% engagement
-                          </span>
+                          {followersFor(post.platform) ? (
+                            <span className="font-medium text-slate-700">
+                              {post.engagementRate}% engagement
+                            </span>
+                          ) : null}
                           <span>{compact(post.likes)} likes</span>
                           <span>{compact(post.comments)} comments</span>
                           {post.views > 0 ? <span>{compact(post.views)} views</span> : null}
@@ -1612,7 +1655,13 @@ export function CompetitionPage() {
             />
           ) : (
             <ul className="grid gap-3 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
-              {competitor.social.map((s) => (
+              {competitor.social.map((s) => {
+                // Derived from the scraped posts, not read off the channel row:
+                // its stored rate and cadence are never written, so a card built
+                // on them shows 0% however much engagement the posts have.
+                const insight = channelInsights.get(socialPlatformKey(s.platform));
+                const posts = insight?.posts ?? 0;
+                return (
                 <li key={s.platform} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
@@ -1649,15 +1698,35 @@ export function CompetitionPage() {
                   <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                     <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                       <dt className="text-slate-500">Followers</dt>
-                      <dd className="font-semibold text-slate-900">{compact(s.followers)}</dd>
+                      <dd
+                        className="font-semibold text-slate-900"
+                        title={
+                          s.followers
+                            ? undefined
+                            : "Not measured yet — the next scan reads it from the profile, or you can add it with the handle."
+                        }
+                      >
+                        {s.followers ? compact(s.followers) : "—"}
+                      </dd>
                     </div>
                     <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                       <dt className="text-slate-500">Engagement</dt>
-                      <dd className="font-semibold text-slate-900">{s.engagementRate}%</dd>
+                      <dd
+                        className="font-semibold text-slate-900"
+                        title={
+                          s.followers && posts
+                            ? undefined
+                            : "Engagement is (likes + comments) ÷ followers, so it needs a follower count and at least one scraped post."
+                        }
+                      >
+                        {s.followers && posts ? `${insight?.averageEngagement ?? 0}%` : "—"}
+                      </dd>
                     </div>
                     <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                       <dt className="text-slate-500">Posts / week</dt>
-                      <dd className="font-semibold text-slate-900">{s.postsPerWeek}</dd>
+                      <dd className="font-semibold text-slate-900">
+                        {posts ? (insight?.postsPerWeek ?? 0) : "—"}
+                      </dd>
                     </div>
                     <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                       <dt className="text-slate-500">Ads live</dt>
@@ -1669,7 +1738,8 @@ export function CompetitionPage() {
                     </div>
                   </dl>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
           </Card>
@@ -1779,6 +1849,18 @@ export function CompetitionPage() {
               placeholder="@glowmartbeauty"
               value={handleValue}
               onChange={(event) => setHandleValue(event.target.value)}
+            />
+          </Field>
+          <Field
+            label="Followers (optional)"
+            hint="Their follower count, e.g. 184000, 184k or 1.2m. Engagement is a share of this, so leaving it blank shows a dash until a scan measures it."
+          >
+            <input
+              className={inputClass}
+              placeholder="184k"
+              inputMode="numeric"
+              value={handleFollowers}
+              onChange={(event) => setHandleFollowers(event.target.value)}
             />
           </Field>
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">

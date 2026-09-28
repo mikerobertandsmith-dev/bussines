@@ -60,6 +60,9 @@ export async function fetchJson<T>(url: string, options: FetchJsonOptions = {}):
         throw new HttpError(
           response.status === 429 ? 429 : 502,
           `Provider request failed (${response.status}): ${text.slice(0, 300)}`,
+          // Kept alongside the outward status: a 400 and a 500 both surface as
+          // 502, but only one of them means the request has to change.
+          response.status,
         );
       }
 

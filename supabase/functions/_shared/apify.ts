@@ -364,6 +364,92 @@ export function engagementRate(likes: number, comments: number, followers: numbe
   return Number((((likes + comments) / followers) * 100).toFixed(3));
 }
 
+/**
+ * The first value that parses to a non-negative number, or null when none does.
+ *
+ * Deliberately not `firstNumber`, which substitutes 0 for "not found": a dataset
+ * that never states a profile's follower count must not be read as "zero
+ * followers", because that would make a real engagement rate impossible to tell
+ * apart from a missing one.
+ */
+function firstCount(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed =
+      typeof value === "string" ? Number(value.replace(/[,\s]/g, "")) : value;
+    if (typeof parsed === "number" && Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return null;
+}
+
+/**
+ * Where a post item keeps the profile object, across the platform actors.
+ *
+ * `metaData` is the one that matters in practice and is verified against a live
+ * `apify/instagram-scraper` dataset: a post item carries no follower field of its
+ * own, but nests the whole profile under `metaData` (`followersCount`, `postsCount`,
+ * `businessCategoryName` …). `authorMeta` is the TikTok scraper's equivalent,
+ * holding `fans`; the rest are the author-shaped names other actors use.
+ */
+const AUTHOR_KEYS = [
+  "metaData",
+  "authorMeta",
+  "owner",
+  "author",
+  "user",
+  "profile",
+  "ownerProfile",
+  "channel",
+] as const;
+
+/**
+ * The monitored profile's follower count, when the scraped dataset reports one.
+ *
+ * Post-oriented actors disagree on whether a *post* item carries it and on what
+ * they call it — `followersCount` on Instagram-flavoured output, `follower_count`
+ * elsewhere, often nested under the author object — so every common spelling is
+ * read. This is the only place `competitor_social.followers` can come from, and
+ * without it `engagementRate` is structurally 0% for every workspace.
+ *
+ * `null` means "this dataset does not say", which the caller keeps distinct from
+ * a genuine zero.
+ */
+export function followersFrom(items: Record<string, unknown>[]): number | null {
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const direct = firstCount(
+      item.followersCount,
+      item.followers,
+      item.followerCount,
+      item.followers_count,
+      item.follower_count,
+      item.subscriberCount,
+      item.subscribers,
+      // TikTok's own word for the same number.
+      item.fans,
+      item.userFollowersCount,
+      item.ownerFollowersCount,
+    );
+    if (direct !== null) return direct;
+
+    for (const key of AUTHOR_KEYS) {
+      const nested = item[key];
+      if (!nested || typeof nested !== "object" || Array.isArray(nested)) continue;
+      const record = nested as Record<string, unknown>;
+      const found = firstCount(
+        record.followersCount,
+        record.followers,
+        record.followerCount,
+        record.followers_count,
+        record.follower_count,
+        record.subscriberCount,
+        record.fans,
+      );
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
 /** One raw dataset item → a post, or null when it has no usable identity. */
 export function normalisePost(
   item: Record<string, unknown>,

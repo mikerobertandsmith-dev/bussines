@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { Bell, BellRing, ChevronRight, Eye } from "lucide-react";
 import { Badge, Card, CardHead, EmptyState, Segmented, Stat } from "../components/primitives";
-import { buildAlerts } from "../lib/alerts";
+import { buildAlerts, buildHealthAlerts, mergeAlerts } from "../lib/alerts";
+import { buildWorkspaceHealth } from "../lib/integrations";
 import type { RouteId } from "../lib/hooks";
 import { useWorkspaceData } from "../lib/workspace";
 
@@ -32,10 +33,33 @@ const DOT_CLASS: Record<string, string> = {
   info: "bg-sky-500",
 };
 
-/** Everything the scans flagged, in one place, filterable by urgency. */
+/**
+ * Everything the scans flagged, in one place, filterable by urgency.
+ *
+ * Two sources feed this list: what the monitored data says changed (`buildAlerts`)
+ * and whether monitoring itself is working at all (`buildHealthAlerts`). The
+ * second is what turns "no alerts" from "nothing happened" into a readable
+ * answer — a scan that has been failing, or a connection the provider rejected,
+ * shows up here rather than only in the settings panel.
+ */
 export function NotificationsPage() {
   const workspace = useWorkspaceData();
-  const alerts = useMemo(() => buildAlerts(workspace), [workspace]);
+
+  const health = useMemo(
+    () =>
+      buildWorkspaceHealth({
+        scanRuns: workspace.scanRuns,
+        integrationConnections: workspace.integrationConnections,
+        reviewConnections: workspace.reviewConnections,
+        socialAccounts: workspace.socialAccounts,
+      }),
+    [workspace],
+  );
+
+  const alerts = useMemo(
+    () => mergeAlerts(buildAlerts(workspace), buildHealthAlerts(health)),
+    [workspace, health],
+  );
   const [filter, setFilter] = useState<NotifFilter>("all");
 
   const urgent = alerts.filter((a) => a.severity === "urgent").length;
@@ -80,7 +104,7 @@ export function NotificationsPage() {
             hint={
               alerts.length
                 ? "Switch the filter to see the rest of your alerts."
-                : "Alerts appear here as soon as a scan finds a price, stock, ad or review change."
+                : "Alerts appear here as soon as a scan finds a price, stock, ad or review change — or when a scan or a connection stops working."
             }
           />
         ) : (
@@ -111,8 +135,9 @@ export function NotificationsPage() {
         )}
 
         <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
-          Open a notification to jump to the page that raised it. Alerts clear themselves once the
-          underlying price, stock or campaign changes again.
+          Open a notification to jump to the page that raised it. Data alerts clear themselves once
+          the underlying price, stock or campaign changes again; a failed scan or a rejected
+          connection stays until it is fixed.
         </div>
       </Card>
     </div>

@@ -17,11 +17,11 @@ import {
   X,
 } from "lucide-react";
 import type { RouteId } from "../lib/hooks";
-import { buildAlerts } from "../lib/alerts";
+import { buildAlerts, buildHealthAlerts, mergeAlerts } from "../lib/alerts";
 import { authEnabled, dbEnabled, demoMode } from "../lib/env";
 import { PROVIDER_CATALOG, buildUsageBars, buildWorkspaceHealth } from "../lib/integrations";
 import { useWorkspace } from "../lib/workspace";
-import { daysAgo, relativeTime, titleCase } from "../lib/format";
+import { daysAgo, relativeTime, titleCase, usd } from "../lib/format";
 import { LogoUpload } from "./LogoUpload";
 import { Modal } from "./Modal";
 import { Badge, Logo, Meter, btnGhost, btnPrimary } from "./primitives";
@@ -159,8 +159,6 @@ export function Layout({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { data, actions, refresh } = useWorkspace();
 
-  const alerts = useMemo(() => (data ? buildAlerts(data) : []), [data]);
-
   // Plan usage and monitoring health both come from rows the app already holds,
   // so the settings modal can report them without calling any provider.
   const usage = useMemo(() => buildUsageBars(data?.providerStatus ?? []), [data?.providerStatus]);
@@ -173,6 +171,15 @@ export function Layout({
         socialAccounts: data?.socialAccounts ?? [],
       }),
     [data?.scanRuns, data?.integrationConnections, data?.reviewConnections, data?.socialAccounts],
+  );
+
+  // The badge counts the same list the Notifications page renders, health alerts
+  // included: a scan failing for days is exactly the kind of thing the count is
+  // there to surface, and two different totals for one destination is a bug the
+  // user would have to reconcile by hand.
+  const alerts = useMemo(
+    () => (data ? mergeAlerts(buildAlerts(data), buildHealthAlerts(health)) : []),
+    [data, health],
   );
 
   const badges: Record<RouteId, number> = {
@@ -444,7 +451,7 @@ export function Layout({
                   <p className="mt-0.5 text-[11px] text-slate-500">{provider.description}</p>
                   <p className="mt-1 text-[10px] text-slate-400">
                     {provider.configured
-                      ? `${provider.connections} connection${provider.connections === 1 ? "" : "s"} · ${provider.requests} call${provider.requests === 1 ? "" : "s"} · $${provider.costUsd.toFixed(2)} recorded`
+                      ? `${provider.connections} connection${provider.connections === 1 ? "" : "s"} · ${provider.requests} call${provider.requests === 1 ? "" : "s"} · ${usd(provider.costUsd)} recorded`
                       : `Add ${provider.envKeys.join(" + ")} to the server, then deploy the gateway functions.`}
                   </p>
                   {/* A capability this provider is configured for in general but
@@ -486,7 +493,7 @@ export function Layout({
                       {bar.cap > 0
                         ? `${bar.units} of ${bar.cap} monthly units`
                         : bar.capUsd > 0
-                          ? `$${bar.costUsd.toFixed(2)} of $${bar.capUsd.toFixed(2)} monthly spend`
+                          ? `${usd(bar.costUsd)} of ${usd(bar.capUsd)} monthly spend`
                           : `${bar.units} units recorded`}
                       {` · ${bar.requests} call${bar.requests === 1 ? "" : "s"}`}
                       {bar.errors ? ` · ${bar.errors} failed` : ""}
@@ -527,7 +534,7 @@ export function Layout({
                   <li key={run.id} className="rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate text-xs font-semibold text-rose-900">
-                        {run.sourceName || titleCase(run.sourceType)} scan failed
+                        {run.sourceName || `${titleCase(run.sourceType)} scan`} failed
                       </span>
                       <span className="shrink-0 text-[10px] text-rose-700">
                         {relativeTime(run.startedAt)}

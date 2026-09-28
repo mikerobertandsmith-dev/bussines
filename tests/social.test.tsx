@@ -3,14 +3,17 @@ import {
   isRecentPost,
   mergeSocialChannel,
   normaliseSocialHandle,
+  parseFollowerCount,
   platformLabel,
   socialPlatformOf,
+  summariseChannelSocial,
   summariseSocial,
 } from "../src/lib/social";
 import { buildAlerts } from "../src/lib/alerts";
 import { sampleWorkspace } from "../src/data/sample";
 import {
   engagementRate,
+  followersFrom,
   inputFor,
   normalisePost,
   normalisePosts,
@@ -105,6 +108,38 @@ describe("summariseSocial", () => {
     expect(insight.posts).toBe(0);
     expect(insight.bestPost).toBeNull();
     expect(insight.postsPerWeek).toBe(0);
+  });
+});
+
+describe("summariseChannelSocial", () => {
+  const now = new Date("2026-09-27T12:00:00.000Z");
+  const daysAgo = (days: number) => new Date(now.getTime() - days * 86_400_000).toISOString();
+
+  it("measures one platform only, not the competitor's other channels", () => {
+    const posts = [
+      post({ externalId: "a", platform: "instagram", postedAt: daysAgo(1), engagementRate: 2 }),
+      post({ externalId: "b", platform: "instagram", postedAt: daysAgo(2), engagementRate: 4 }),
+      post({ externalId: "c", platform: "tiktok", postedAt: daysAgo(1), engagementRate: 9 }),
+    ];
+
+    const instagram = summariseChannelSocial(posts, "comp-1", "instagram", now);
+    expect(instagram.posts).toBe(2);
+    expect(instagram.averageEngagement).toBe(3);
+    expect(instagram.postsPerWeek).toBe(0.5);
+  });
+
+  it("matches a platform however the stored channel row spells it", () => {
+    // `competitor_social.platform` can hold a display label for an imported row.
+    const posts = [post({ externalId: "a", platform: "x", postedAt: daysAgo(1), engagementRate: 1 })];
+    expect(summariseChannelSocial(posts, "comp-1", "X (Twitter)", now).posts).toBe(1);
+  });
+
+  it("reports nothing measured for a platform with no scraped posts", () => {
+    expect(summariseChannelSocial([], "comp-1", "facebook", now)).toEqual({
+      posts: 0,
+      postsPerWeek: 0,
+      averageEngagement: 0,
+    });
   });
 });
 
@@ -330,6 +365,89 @@ describe("competitor handle normalising", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0].platform).toBe("tiktok");
+  });
+});
+
+describe("follower counts behind an engagement rate", () => {
+  it("reads the spellings the platform actors use, flat and nested", () => {
+    expect(followersFrom([{ followersCount: 184_000 }])).toBe(184_000);
+    expect(followersFrom([{ follower_count: "41,500" }])).toBe(41_500);
+    expect(followersFrom([{ owner: { followersCount: 9_800 } }])).toBe(9_800);
+    expect(followersFrom([{ author: { followerCount: 1_200 } }])).toBe(1_200);
+  });
+
+  it("reports a dataset that never states it as unknown, not as zero", () => {
+    // Zero would take the same branch as a real zero and make every engagement
+    // rate structurally 0% — the bug this reader exists to prevent.
+    expect(followersFrom([{ id: "1", likesCount: 12 }])).toBeNull();
+    expect(followersFrom([])).toBeNull();
+  });
+
+  it("takes the first item that actually states one", () => {
+    expect(followersFrom([{ id: "a" }, { followers: 500 }])).toBe(500);
+  });
+
+  it("turns a count and a post into a real engagement rate once both exist", () => {
+    const followers = followersFrom([{ followersCount: 200_000 }]);
+    expect(followers).toBe(200_000);
+    expect(engagementRate(9_000, 700, followers ?? 0)).toBe(4.85);
+  });
+
+  it("reads the profile an Instagram post item nests under metaData", () => {
+    // Shape taken from a live `apify/instagram-scraper` dataset: the post item
+    // carries no follower field of its own, and the whole profile — follower
+    // count included — sits under `metaData`. Miss this nesting and every
+    // Instagram engagement rate stays 0% however many posts are captured.
+    const item = {
+      id: "3170000000000000000",
+      shortCode: "DPxxxx",
+      ownerUsername: "sephora",
+      likesCount: 211_983,
+      commentsCount: 900,
+      metaData: {
+        username: "sephora",
+        fullName: "Sephora",
+        followersCount: 22_716_271,
+        postsCount: 9_008,
+        isBusinessAccount: true,
+      },
+    };
+
+    expect(followersFrom([item])).toBe(22_716_271);
+    expect(engagementRate(item.likesCount, item.commentsCount, 22_716_271)).toBe(0.937);
+  });
+
+  it("reads TikTok's authorMeta.fans, its own word for the same number", () => {
+    expect(followersFrom([{ id: "1", authorMeta: { name: "sephora", fans: 4_100_000 } }])).toBe(
+      4_100_000,
+    );
+  });
+});
+
+describe("parseFollowerCount", () => {
+  it("accepts a plain number, thousands separators and the k/m shorthand", () => {
+    expect(parseFollowerCount("184000")).toEqual({ followers: 184_000 });
+    expect(parseFollowerCount("184,000")).toEqual({ followers: 184_000 });
+    expect(parseFollowerCount("184k")).toEqual({ followers: 184_000 });
+    expect(parseFollowerCount("1.2m")).toEqual({ followers: 1_200_000 });
+  });
+
+  it("treats a blank box as unknown — neither a count nor an error", () => {
+    // It must stay unknown: saving 0 would wipe a figure the last scan measured.
+    expect(parseFollowerCount("")).toEqual({});
+    expect(parseFollowerCount("   ")).toEqual({});
+  });
+
+  it("refuses what it cannot read rather than saving a wrong denominator", () => {
+    expect(parseFollowerCount("lots").error).toBeTruthy();
+    expect(parseFollowerCount("184k followers").error).toBeTruthy();
+    expect(parseFollowerCount("-5").error).toBeTruthy();
+    expect(parseFollowerCount("184k").followers).toBe(184_000);
+    expect(parseFollowerCount("lots").followers).toBeUndefined();
+  });
+
+  it("refuses a count the integer column cannot hold", () => {
+    expect(parseFollowerCount("9999999999").error).toBeTruthy();
   });
 });
 

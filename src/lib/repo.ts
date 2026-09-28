@@ -1752,21 +1752,26 @@ export async function saveCompetitorSocialHandle(
     );
   }
 
+  const payload: Record<string, unknown> = {
+    business_id: businessId,
+    competitor_id: input.competitorId,
+    platform,
+    handle,
+    // A handle a person typed or corrected is manual, whichever way it was
+    // first found: provenance follows what is stored now, not its history.
+    source: "manual",
+  };
+  // `followers` is sent only when the caller really supplied a count. A blank
+  // field means "unknown", and an upsert that sends 0 there would wipe the
+  // figure the last scan measured — turning every engagement rate back to 0%.
+  // Omitting the column leaves the stored value (or the column default) alone.
+  if (Number.isFinite(input.followers)) {
+    payload.followers = Math.max(0, Math.round(Number(input.followers)));
+  }
+
   const { data, error } = await db
     .from("competitor_social")
-    .upsert(
-      {
-        business_id: businessId,
-        competitor_id: input.competitorId,
-        platform,
-        handle,
-        followers: Number.isFinite(input.followers) ? Number(input.followers) : 0,
-        // A handle a person typed or corrected is manual, whichever way it was
-        // first found: provenance follows what is stored now, not its history.
-        source: "manual",
-      },
-      { onConflict: "business_id,competitor_id,platform" },
-    )
+    .upsert(payload, { onConflict: "business_id,competitor_id,platform" })
     .select()
     .single();
   if (error || !data) {
