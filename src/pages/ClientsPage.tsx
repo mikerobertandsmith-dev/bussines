@@ -29,7 +29,7 @@ import {
 } from "../components/primitives";
 import { CustomerTable } from "../components/customer-table";
 import { Modal } from "../components/Modal";
-import { useToast } from "../components/Toast";
+import { useActionToast, useToast, type ActionMessages } from "../components/Toast";
 import { cadenceLabel, daysAhead, money, relativeTime, shortDate, titleCase } from "../lib/format";
 import { CUSTOMER_MESSAGE_TYPES } from "../lib/options";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
@@ -76,6 +76,7 @@ function subjectFor(client: Client, types: MessageType[]): string {
 
 export function ClientsPage() {
   const toast = useToast();
+  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
   const clients = workspace.clients;
@@ -118,8 +119,8 @@ export function ClientsPage() {
     return { active: active.length, total: clients.length, avgOpen };
   }, [clients]);
 
-  function updateClient(id: string, patch: Partial<Client>) {
-    void actions.updateClient(id, patch);
+  function updateClient(id: string, patch: Partial<Client>, messages: ActionMessages) {
+    void actionToast(() => actions.updateClient(id, patch), messages);
   }
 
   function addClient() {
@@ -135,16 +136,22 @@ export function ClientsPage() {
       toast("That email is already on your customer list.");
       return;
     }
-    void actions.addClient({
-      name: form.name.trim(),
-      email: form.email.trim(),
-      company: form.company.trim() || form.name.trim(),
-      industry: form.industry,
-      tier: form.tier,
-      frequency: account.sendFrequency,
-      messageTypes: account.messageTypes,
-    });
-    toast(`${form.name.trim()} added to the active customer list.`);
+    void actionToast(
+      () =>
+        actions.addClient({
+          name: form.name.trim(),
+          email: form.email.trim(),
+          company: form.company.trim() || form.name.trim(),
+          industry: form.industry,
+          tier: form.tier,
+          frequency: account.sendFrequency,
+          messageTypes: account.messageTypes,
+        }),
+      {
+        success: `${form.name.trim()} added to the active customer list.`,
+        failure: "That customer could not be added.",
+      },
+    );
     setForm(EMPTY_FORM);
     setAddOpen(false);
   }
@@ -154,9 +161,11 @@ export function ClientsPage() {
       toast("Select at least one customer to mail.");
       return;
     }
-    void actions.sendMessages(ids);
+    void actionToast(() => actions.sendMessages(ids), {
+      success: `${ids.length} personalised email${ids.length > 1 ? "s" : ""} queued for sending.`,
+      failure: "Those emails could not be queued.",
+    });
     setQueued([]);
-    toast(`${ids.length} personalised email${ids.length > 1 ? "s" : ""} queued for sending.`);
   }
 
   function toggleQueued(id: string) {
@@ -256,12 +265,16 @@ export function ClientsPage() {
             onEmail={(id) => sendTo([id])}
             onToggleStatus={(c) => {
               const next = c.status === "paused" ? "active" : "paused";
-              updateClient(c.id, { status: next });
-              toast(`${c.name} is now ${next === "active" ? "receiving" : "paused from"} sends.`);
+              updateClient(c.id, { status: next }, {
+                success: `${c.name} is now ${next === "active" ? "receiving" : "paused from"} sends.`,
+                failure: `${c.name}'s status could not be saved.`,
+              });
             }}
             onRemove={(c) => {
-              void actions.removeClient(c.id);
-              toast(`${c.name} removed from the customer list.`);
+              void actionToast(() => actions.removeClient(c.id), {
+                success: `${c.name} removed from the customer list.`,
+                failure: `${c.name} could not be removed.`,
+              });
             }}
           />
 
@@ -483,8 +496,10 @@ export function ClientsPage() {
               type="button"
               className={btnPrimary}
               onClick={() => {
-                void actions.saveMailAccount(account);
-                toast("Configuration saved — everyone now sends on the same cadence.");
+                void actionToast(() => actions.saveMailAccount(account), {
+                  success: "Configuration saved — everyone now sends on the same cadence.",
+                  failure: "The configuration could not be saved.",
+                });
                 setAccountOpen(false);
               }}
             >
@@ -599,8 +614,10 @@ export function ClientsPage() {
                 type="button"
                 className={btnGhost}
                 onClick={() => {
-                  void actions.removeClient(openClient.id);
-                  toast(`${openClient.name} removed from the list.`);
+                  void actionToast(() => actions.removeClient(openClient.id), {
+                    success: `${openClient.name} removed from the list.`,
+                    failure: `${openClient.name} could not be removed.`,
+                  });
                   setOpenClientId(null);
                 }}
               >
@@ -624,7 +641,12 @@ export function ClientsPage() {
               <Segmented
                 size="sm"
                 value={openClient.status}
-                onChange={(v) => updateClient(openClient.id, { status: v })}
+                onChange={(v) =>
+                  updateClient(openClient.id, { status: v }, {
+                    success: `${openClient.name} is now ${v}.`,
+                    failure: `${openClient.name}'s status could not be saved.`,
+                  })
+                }
                 options={[
                   { value: "active", label: "Active" },
                   { value: "paused", label: "Paused" },

@@ -1,10 +1,19 @@
 import { daysAgo, daysAhead } from "../lib/format";
 import type {
+  AdAngle,
   AdAsset,
+  CompetitorReviewGap,
   GeoRankRow,
   InventoryRecommendation,
+  KeywordCluster,
+  KeywordIdea,
+  LocalPackRanking,
+  LocalProfileHealth,
   RankRow,
+  ReviewConnection,
   ReviewSource,
+  SerpRanking,
+  ShareOfVoice,
   SocialScore,
   TrafficPoint,
   WeeklyReport,
@@ -136,16 +145,29 @@ export const latestReviewScan = {
       text: "Received my lip kit in two days and the checkout was smooth on mobile.",
       sentiment: "positive" as const,
       action: "Ask for a testimonial quote for the ad creative.",
+      externalId: "rf-grace-w",
+      platform: "google",
+      language: "en",
+      replied: true,
+      replyText: "Thank you Grace — enjoy the kit, and we would love a one-line quote.",
+      repliedAt: daysAgo(0, 3),
     },
     {
       id: "myrev-2",
       author: "Peter M.",
       rating: 2,
       source: "Trustpilot",
-      postedAt: daysAgo(1, 2),
+      // Older than the 48h reply window, so the "awaiting a reply" alert fires.
+      postedAt: daysAgo(3),
       text: "Charger I bought was showing in stock but arrived 6 days later than promised.",
       sentiment: "negative" as const,
       action: "Sync charger stock from Vantage feed; reply with a delivery credit.",
+      externalId: "rf-peter-m",
+      platform: "trustpilot",
+      language: "en",
+      replied: false,
+      replyText: "",
+      repliedAt: null,
     },
     {
       id: "myrev-3",
@@ -156,6 +178,12 @@ export const latestReviewScan = {
       text: "Great prices but I could not find the blush palette under 'Face' on the website.",
       sentiment: "neutral" as const,
       action: "Add 'palette' to the Face category search synonyms.",
+      externalId: "rf-nadia-h",
+      platform: "facebook",
+      language: "en",
+      replied: false,
+      replyText: "",
+      repliedAt: null,
     },
     {
       id: "myrev-4",
@@ -166,9 +194,55 @@ export const latestReviewScan = {
       text: "Their team replied in the DMs and swapped the shade for me the same day.",
       sentiment: "positive" as const,
       action: "Repost to Stories with the new lip-kit ad.",
+      externalId: "rf-samuel-k",
+      platform: "instagram",
+      language: "en",
+      replied: false,
+      replyText: "",
+      repliedAt: null,
     },
   ],
 };
+
+/**
+ * Sample connected review profiles so the reply composer and the "connect a
+ * profile" affordance render before a live review sync runs.
+ */
+export const reviewConnections: ReviewConnection[] = [
+  {
+    id: "rc-google",
+    provider: "reviews",
+    platform: "google",
+    handle: "yourretailbrand.com",
+    label: "Google Reviews",
+    status: "active",
+    lastSyncedAt: daysAgo(0, 3),
+    lastError: "",
+    createdAt: daysAgo(20),
+  },
+  {
+    id: "rc-trustpilot",
+    provider: "reviews",
+    platform: "trustpilot",
+    handle: "yourretailbrand.com",
+    label: "Trustpilot",
+    status: "active",
+    lastSyncedAt: daysAgo(0, 3),
+    lastError: "",
+    createdAt: daysAgo(20),
+  },
+  {
+    id: "rc-facebook",
+    provider: "reviews",
+    platform: "facebook",
+    handle: "YourRetailBrand",
+    label: "Facebook",
+    status: "active",
+    lastSyncedAt: daysAgo(1),
+    lastError: "",
+    createdAt: daysAgo(12),
+  },
+];
 
 export const adAssets: AdAsset[] = [
   {
@@ -272,6 +346,181 @@ export const socialScores: SocialScore[] = [
     focus: "medium",
     reason: "StitchLine gets 31% of traffic from Pinterest; strong fit for your dress and beauty SKUs.",
   },
+];
+
+/* ---------------------------------------------------- search visibility */
+/*
+ * Sample SerpApi output so the Local visibility panel renders before a real
+ * scan runs. Positions mirror `topSeoKeywords`, with a small mobile variance.
+ */
+export const serpRankings: SerpRanking[] = [
+  { keyword: "velvet matte lip kit", device: "desktop", location: "Kenya", position: 3, url: "https://yourretailbrand.com/products/velvet-lip-kit", title: "Velvet Matte Lip Kit — 12 shades", snippetType: "product", isRichResult: true, previousPosition: 3, previousIsRichResult: true, previousSnippetType: "product", checkedAt: daysAgo(0, 3) },
+  { keyword: "velvet matte lip kit", device: "mobile", location: "Kenya", position: 4, url: "https://yourretailbrand.com/products/velvet-lip-kit", title: "Velvet Matte Lip Kit — 12 shades", snippetType: "product", isRichResult: true, previousPosition: 5, previousIsRichResult: true, previousSnippetType: "product", checkedAt: daysAgo(0, 3) },
+  { keyword: "hydra glow serum 50ml", device: "desktop", location: "Kenya", position: 2, url: "https://yourretailbrand.com/products/hydra-glow-serum", title: "Hydra Glow Serum 50ml", snippetType: "faq", isRichResult: true, previousPosition: 2, previousIsRichResult: true, previousSnippetType: "faq", checkedAt: daysAgo(0, 3) },
+  { keyword: "hydra glow serum 50ml", device: "mobile", location: "Kenya", position: 2, url: "https://yourretailbrand.com/products/hydra-glow-serum", title: "Hydra Glow Serum 50ml", snippetType: "faq", isRichResult: true, previousPosition: 2, previousIsRichResult: true, previousSnippetType: "faq", checkedAt: daysAgo(0, 3) },
+  { keyword: "aurora x5 phone price", device: "desktop", location: "Kenya", position: 7, url: "https://yourretailbrand.com/products/aurora-x5", title: "Aurora X5 — price and specs", snippetType: "", isRichResult: false, previousPosition: 9, previousIsRichResult: false, previousSnippetType: "", checkedAt: daysAgo(0, 3) },
+  { keyword: "aurora x5 phone price", device: "mobile", location: "Kenya", position: 9, url: "https://yourretailbrand.com/products/aurora-x5", title: "Aurora X5 — price and specs", snippetType: "", isRichResult: false, previousPosition: 8, previousIsRichResult: false, previousSnippetType: "", checkedAt: daysAgo(0, 3) },
+  { keyword: "anc earbuds under 50", device: "desktop", location: "Kenya", position: 12, url: "", title: "", snippetType: "", isRichResult: false, previousPosition: 9, previousIsRichResult: true, previousSnippetType: "faq", checkedAt: daysAgo(0, 3) },
+  { keyword: "anc earbuds under 50", device: "mobile", location: "Kenya", position: null, url: "", title: "", snippetType: "", isRichResult: false, previousPosition: null, previousIsRichResult: false, previousSnippetType: "", checkedAt: daysAgo(0, 3) },
+  { keyword: "cloud blush palette", device: "desktop", location: "Kenya", position: 5, url: "https://yourretailbrand.com/products/cloud-blush", title: "Cloud Blush Trio Palette", snippetType: "product", isRichResult: true, previousPosition: 5, previousIsRichResult: true, previousSnippetType: "product", checkedAt: daysAgo(0, 3) },
+  { keyword: "cloud blush palette", device: "mobile", location: "Kenya", position: 6, url: "https://yourretailbrand.com/products/cloud-blush", title: "Cloud Blush Trio Palette", snippetType: "product", isRichResult: true, previousPosition: 6, previousIsRichResult: true, previousSnippetType: "product", checkedAt: daysAgo(0, 3) },
+];
+
+export const localPackRankings: LocalPackRanking[] = [
+  { keyword: "beauty shop near me", location: "Nairobi", inPack: true, packPosition: 2, placeId: "yourretailbrand", pack: [ { position: 1, name: "GlowMart Beauty", placeId: "glowmartbeauty", rating: 4.3, reviews: 3182 }, { position: 2, name: "Your Retail Brand", placeId: "yourretailbrand", rating: 4.6, reviews: 1842 }, { position: 3, name: "StitchLine Boutique", placeId: "stitchlineboutique", rating: 4.6, reviews: 1106 } ], previousInPack: true, previousPackPosition: 2, checkedAt: daysAgo(0, 3) },
+  { keyword: "lip kit near me", location: "Nairobi", inPack: true, packPosition: 1, placeId: "yourretailbrand", pack: [ { position: 1, name: "Your Retail Brand", placeId: "yourretailbrand", rating: 4.6, reviews: 1842 }, { position: 2, name: "GlowMart Beauty", placeId: "glowmartbeauty", rating: 4.3, reviews: 3182 } ], previousInPack: true, previousPackPosition: 3, checkedAt: daysAgo(0, 3) },
+  { keyword: "phone accessories shop", location: "Nairobi", inPack: false, packPosition: null, placeId: "yourretailbrand", pack: [ { position: 1, name: "TecWave Electronics", placeId: "tecwave", rating: 4.1, reviews: 2044 }, { position: 2, name: "PhonePoint", placeId: "phonepoint", rating: 4.4, reviews: 880 } ], previousInPack: true, previousPackPosition: 3, checkedAt: daysAgo(0, 3) },
+];
+
+export const localProfileHealth: LocalProfileHealth = {
+  placeId: "yourretailbrand",
+  label: "Your Retail Brand",
+  score: 78,
+  checks: [
+    { label: "Website linked", ok: true, detail: "yourretailbrand.com" },
+    { label: "Opening hours", ok: true, detail: "Mon–Sat 9:00–19:00" },
+    { label: "Photos", ok: true, detail: "14 photos" },
+    { label: "Business description", ok: false, detail: "Add a 750-character description" },
+    { label: "Category set", ok: true, detail: "Beauty supply store" },
+    { label: "Review volume", ok: false, detail: "1,842 reviews — GlowMart has 3,182" },
+  ],
+  reviewsCount: 1842,
+  averageRating: 4.6,
+  address: "Kimathi Street, Nairobi, Kenya",
+  category: "Beauty supply store",
+  website: "https://yourretailbrand.com",
+  checkedAt: daysAgo(0, 3),
+};
+
+/**
+ * Deterministic demo suggestions for a seed term. Used in demo mode (and before
+ * the gateway is deployed) so the keyword finder always returns something.
+ */
+export function sampleKeywordIdeas(seed: string): KeywordIdea[] {
+  const clean = seed.trim().toLowerCase() || "your product";
+  const stamp = new Date().toISOString();
+  const slug = clean.replace(/[^a-z0-9]+/g, "-");
+  return [
+    `${clean} near me`,
+    `${clean} price`,
+    `best ${clean} 2026`,
+    `buy ${clean} online`,
+    `${clean} reviews`,
+  ].map((suggestion, index) => ({
+    id: `ki-demo-${slug}-${index}`,
+    seed: clean,
+    suggestion,
+    relevance: 900 - index * 120,
+    source: "autocomplete",
+    savedAsKeyword: false,
+    cluster: "",
+    createdAt: stamp,
+  }));
+}
+
+export const keywordIdeas: KeywordIdea[] = [
+  { id: "ki-1", seed: "velvet lip kit", suggestion: "velvet lip kit near me", relevance: 1250, source: "autocomplete", savedAsKeyword: false, cluster: "", createdAt: daysAgo(0, 3) },
+  { id: "ki-2", seed: "velvet lip kit", suggestion: "velvet lip kit price in kenya", relevance: 601, source: "autocomplete", savedAsKeyword: false, cluster: "", createdAt: daysAgo(0, 3) },
+  { id: "ki-3", seed: "velvet lip kit", suggestion: "velvet lip kit shades for dark skin", relevance: 540, source: "autocomplete", savedAsKeyword: false, cluster: "", createdAt: daysAgo(0, 3) },
+  { id: "ki-4", seed: "velvet lip kit", suggestion: "best velvet lip kit 2026", relevance: 480, source: "autocomplete", savedAsKeyword: true, cluster: "", createdAt: daysAgo(0, 3) },
+];
+
+/*
+ * Sample AI drafts, so every drafting surface renders with no provider key —
+ * the same promise the rest of the sample data keeps.
+ *
+ * These are copy, not measurements. A draft is something the user reads, edits
+ * and confirms, so there is nothing here that could be wrong the way an invented
+ * number would be. Each is deterministic, so a demo does not reshuffle on click.
+ */
+
+/** A plausible reply to one of the sample reviews. */
+export function sampleReplyDraft(input: { author: string; rating: number }): {
+  reply: string;
+  tone: string;
+} {
+  const who = input.author.trim() || "there";
+  if (input.rating <= 3) {
+    return {
+      tone: "apologetic",
+      reply: `Thank you for telling us, ${who} — that is not the experience we want anyone to have, and we are sorry. We have raised it with the team. If you are willing, please contact us directly so we can put it right.`,
+    };
+  }
+  return {
+    tone: "grateful",
+    reply: `Thank you, ${who} — that is good to hear. We will pass it on to the team, and we hope to see you again soon.`,
+  };
+}
+
+/** Angles for the demo social tab, grounded in the sample catalogue. */
+export function sampleAdAngles(): AdAngle[] {
+  return [
+    {
+      headline: "The shade that lasts past lunch",
+      rationale: "Answers the wear-time worry people raise before buying a matte lip kit.",
+      itemHint: "Velvet Matte Lip Kit",
+    },
+    {
+      headline: "Twelve shades, matched in store",
+      rationale: "Turns choosing online into a reason to visit, which is where the sale closes.",
+      itemHint: "Velvet Matte Lip Kit",
+    },
+    {
+      headline: "Nothing that dries your lips",
+      rationale: "Leads with the comfort problem rather than the colour, which is less crowded.",
+      itemHint: "Velvet Matte Lip Kit",
+    },
+  ];
+}
+
+/**
+ * Themes for a seed's demo suggestions.
+ *
+ * Grouped from the suggestions actually passed in, rather than a fixed answer,
+ * so the demo behaves like the real thing: every keyword shown belongs to a
+ * suggestion the user can see in the list beside it.
+ */
+export function sampleKeywordClusters(ideas: KeywordIdea[]): KeywordCluster[] {
+  const groups: { name: string; intent: string; match: (s: string) => boolean }[] = [
+    { name: "Ready to buy", intent: "transactional", match: (s) => /near me|buy|shop|online/.test(s) },
+    { name: "Price and value", intent: "commercial", match: (s) => /price|cost|cheap|affordable|deal/.test(s) },
+    { name: "Choosing one", intent: "commercial", match: (s) => /best|review|compare|vs\b/.test(s) },
+  ];
+
+  const clusters: KeywordCluster[] = [];
+  for (const group of groups) {
+    const keywords = ideas.filter((idea) => group.match(idea.suggestion.toLowerCase()));
+    if (keywords.length) {
+      clusters.push({ name: group.name, intent: group.intent, keywords: keywords.map((k) => k.suggestion) });
+    }
+  }
+
+  // Anything the patterns missed is still worth showing, so it becomes a theme
+  // of its own rather than quietly disappearing from the grouped view.
+  const placed = new Set(clusters.flatMap((cluster) => cluster.keywords));
+  const rest = ideas.filter((idea) => !placed.has(idea.suggestion)).map((idea) => idea.suggestion);
+  if (rest.length) clusters.push({ name: "Still researching", intent: "informational", keywords: rest });
+
+  return clusters;
+}
+
+/*
+ * Sample Share of Voice and Competitor Review Gap so Competition → Local renders
+ * before a real benchmark runs. Mirrors the tracked keyword set and the local
+ * profile health review counts above.
+ */
+export const shareOfVoice: ShareOfVoice[] = [
+  { competitorId: "comp-glowmart", competitorName: "GlowMart Beauty", keywordSet: "tracked", termCount: 10, ourTop10: 6, theirTop10: 8, ourShare: 60, theirShare: 80, previousOurShare: 60, checkedAt: daysAgo(0, 3) },
+  { competitorId: "comp-tecwave", competitorName: "TecWave Electronics", keywordSet: "tracked", termCount: 10, ourTop10: 6, theirTop10: 5, ourShare: 60, theirShare: 50, previousOurShare: 44, checkedAt: daysAgo(0, 3) },
+  { competitorId: "comp-stitchline", competitorName: "StitchLine Boutique", keywordSet: "tracked", termCount: 10, ourTop10: 6, theirTop10: 4, ourShare: 60, theirShare: 40, previousOurShare: 60, checkedAt: daysAgo(0, 3) },
+];
+
+export const competitorReviewGaps: CompetitorReviewGap[] = [
+  // GlowMart's lead grew since the last benchmark, so the "review gap widened"
+  // alert has something to fire on in demo mode.
+  { competitorId: "comp-glowmart", competitorName: "GlowMart Beauty", placeId: "glowmartbeauty", ourReviews: 1842, theirReviews: 3182, reviewGap: 1340, ourRating: 4.6, theirRating: 4.3, ratingGap: 0.3, previousReviewGap: 1180, checkedAt: daysAgo(0, 3) },
+  { competitorId: "comp-tecwave", competitorName: "TecWave Electronics", placeId: "tecwave", ourReviews: 1842, theirReviews: 2044, reviewGap: 202, ourRating: 4.6, theirRating: 4.1, ratingGap: 0.5, previousReviewGap: null, checkedAt: daysAgo(0, 3) },
+  { competitorId: "comp-stitchline", competitorName: "StitchLine Boutique", placeId: "stitchlineboutique", ourReviews: 1842, theirReviews: 1106, reviewGap: -736, ourRating: 4.6, theirRating: 4.6, ratingGap: 0, previousReviewGap: null, checkedAt: daysAgo(0, 3) },
 ];
 
 export const inventoryRecommendations: InventoryRecommendation[] = [

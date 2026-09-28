@@ -513,9 +513,15 @@ function BusinessScreen() {
                   {row.volume.toLocaleString()}
                 </Td>
                 <Td className="text-right">
-                  <Badge tone={row.position <= 3 ? "good" : row.position <= 10 ? "info" : "neutral"}>
-                    #{row.position}
-                  </Badge>
+                  {row.position === null ? (
+                    <Badge tone="neutral">Not ranked</Badge>
+                  ) : (
+                    <Badge
+                      tone={row.position <= 3 ? "good" : row.position <= 10 ? "info" : "neutral"}
+                    >
+                      #{row.position}
+                    </Badge>
+                  )}
                 </Td>
               </tr>
             ))}

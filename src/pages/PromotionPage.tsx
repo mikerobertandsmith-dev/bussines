@@ -4,6 +4,7 @@ import {
   Check,
   Clock,
   Download,
+  ExternalLink,
   FileCheck2,
   Gift,
   Globe,
@@ -15,7 +16,9 @@ import {
   Package,
   Percent,
   Plus,
+  RefreshCw,
   Send,
+  Share2,
   Sparkles,
   Star,
   Store,
@@ -36,16 +39,24 @@ import {
   btnPrimary,
   inputClass,
 } from "../components/primitives";
+import { Modal } from "../components/Modal";
 import { AdFrame, TEMPLATE_SIZES, type AdFrameDesign } from "../components/promotion-frame";
-import { useToast } from "../components/Toast";
-import { money, relativeTime } from "../lib/format";
-import { useWorkspace, useWorkspaceData, type PromotionBriefInput } from "../lib/workspace";
+import { useActionToast, useToast } from "../components/Toast";
+import { money, relativeTime, shortDate } from "../lib/format";
+import {
+  useWorkspace,
+  useWorkspaceData,
+  type PromotionBriefInput,
+  type PublishAdInput,
+} from "../lib/workspace";
 import type {
   DeliveredAd,
   PromotionBrief,
   PromotionBriefStatus,
   PromotionComponent,
   PromotionTemplate,
+  PublishJobStatus,
+  SocialPublishJob,
 } from "../lib/types";
 
 const COMPONENT_OPTIONS: {
@@ -199,9 +210,48 @@ function fromBrief(b: PromotionBrief): PromotionBriefInput & { id: string } {
   };
 }
 
+/** Social platforms a published ad can go to, with their brand marks. */
+const PLATFORM_ICON: Record<string, string> = {
+  instagram: "/icons/instagram.svg",
+  facebook: "/icons/facebook.svg",
+  x: "/icons/x.svg",
+  tiktok: "/icons/tiktok.svg",
+  linkedin: "/icons/linkedin.svg",
+};
+
+const PUBLISH_STATUS_META: Record<
+  PublishJobStatus,
+  { label: string; tone: "neutral" | "info" | "warn" | "good" | "bad" }
+> = {
+  queued: { label: "Queued", tone: "neutral" },
+  publishing: { label: "Publishing", tone: "info" },
+  published: { label: "Published", tone: "good" },
+  partial: { label: "Partial", tone: "warn" },
+  failed: { label: "Failed", tone: "bad" },
+};
+
+/** The caption a brief suggests, so the modal opens with something to edit. */
+function captionFromBrief(brief: PromotionBrief | null, fallback: string): string {
+  if (!brief) return fallback;
+  const parts: string[] = [];
+  if (brief.headline.trim()) parts.push(brief.headline.trim());
+  if (brief.dealText.trim()) parts.push(brief.dealText.trim());
+  if (brief.components.includes("coupon") && brief.couponCode.trim())
+    parts.push(`Use code ${brief.couponCode.trim()}.`);
+  if (brief.contactInfo.trim()) parts.push(brief.contactInfo.trim());
+  return parts.join(" · ") || fallback;
+}
+
+/** IANA zone from a stored label like "Africa/Nairobi (GMT+3)". */
+function ianaTimezone(value: string): string {
+  const bare = value.split("(")[0].trim();
+  return /^[A-Za-z]+\/[A-Za-z_+-]+$/.test(bare) ? bare : "UTC";
+}
+
 type HistoryEntry =
   | { kind: "brief"; at: string; brief: PromotionBrief }
-  | { kind: "ad"; at: string; ad: DeliveredAd };
+  | { kind: "ad"; at: string; ad: DeliveredAd }
+  | { kind: "published"; at: string; job: SocialPublishJob };
 
 /** Shown when a component needs catalogue items but there are none to pick from. */
 function NoCatalogueItems({ kind }: { kind: "product" | "service" | "any" }) {
@@ -226,15 +276,39 @@ function NoCatalogueItems({ kind }: { kind: "product" | "service" | "any" }) {
 
 export function PromotionPage() {
   const toast = useToast();
+  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
-  const { profile, inventory, promotionBriefs, deliveredAds } = workspace;
+  const { profile, inventory, promotionBriefs, deliveredAds, socialAccounts, publishJobs } =
+    workspace;
 
   const [form, setForm] = useState<PromotionBriefInput & { id?: string }>(() =>
     promotionBriefs[0] ? fromBrief(promotionBriefs[0]) : BLANK,
   );
   const [downloading, setDownloading] = useState(false);
   const frameRef = useRef<HTMLDivElement>(null);
+
+  // Post-ad modal state.
+  const [postTarget, setPostTarget] = useState<{ ad: DeliveredAd; briefId: string | null } | null>(
+    null,
+  );
+  const [postCaption, setPostCaption] = useState("");
+  const [postAccounts, setPostAccounts] = useState<string[]>([]);
+  const [postMode, setPostMode] = useState<"now" | "schedule">("now");
+  const [postWhen, setPostWhen] = useState("");
+  const [postTimezone, setPostTimezone] = useState("UTC");
+  const [posting, setPosting] = useState(false);
+
+  const accounts = useMemo(() => socialAccounts.filter((a) => a.status === "active"), [socialAccounts]);
+  const postAttempts = useMemo(
+    () =>
+      postTarget
+        ? publishJobs
+            .filter((job) => job.deliveredAdId === postTarget.ad.id)
+            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        : [],
+    [publishJobs, postTarget],
+  );
 
   const productItem = useMemo(
     () => inventory.find((i) => i.id === form.itemId && i.kind === "product") ?? null,
@@ -278,9 +352,10 @@ export function PromotionPage() {
     const entries: HistoryEntry[] = [
       ...promotionBriefs.map((brief) => ({ kind: "brief" as const, at: brief.updatedAt, brief })),
       ...deliveredAds.map((ad) => ({ kind: "ad" as const, at: ad.deliveredAt, ad })),
+      ...publishJobs.map((job) => ({ kind: "published" as const, at: job.updatedAt, job })),
     ];
     return entries.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-  }, [promotionBriefs, deliveredAds]);
+  }, [promotionBriefs, deliveredAds, publishJobs]);
 
   const on = (component: PromotionComponent) => form.components.includes(component);
 
@@ -325,8 +400,15 @@ export function PromotionPage() {
       return;
     }
     const editing = Boolean(form.id);
-    void actions.savePromotionBrief({ ...form, name: briefName, status: "submitted" });
-    toast(editing ? "Brief updated and sent back to the design team." : "Brief sent to the design team.");
+    void actionToast(
+      () => actions.savePromotionBrief({ ...form, name: briefName, status: "submitted" }),
+      {
+        success: editing
+          ? "Brief updated and sent back to the design team."
+          : "Brief sent to the design team.",
+        failure: "That brief could not be saved.",
+      },
+    );
     if (!editing) setForm({ ...BLANK });
   }
 
@@ -346,6 +428,106 @@ export function PromotionPage() {
       toast("Could not export the image — try again once the images have loaded.");
     } finally {
       setDownloading(false);
+    }
+  }
+
+  /* ------------------------------------------------ post ad (publishing) */
+
+  /** Opens the Post-ad modal for a delivered design, seeded from its brief. */
+  function openPostAd(ad: DeliveredAd) {
+    const brief = ad.briefId ? (promotionBriefs.find((b) => b.id === ad.briefId) ?? null) : null;
+    setPostTarget({ ad, briefId: ad.briefId });
+    setPostCaption(captionFromBrief(brief, ad.name));
+    setPostAccounts(accounts.map((account) => account.id));
+    setPostMode("now");
+    setPostWhen("");
+    setPostTimezone(ianaTimezone(profile.timezone));
+  }
+
+  function togglePostAccount(accountId: string) {
+    setPostAccounts((current) =>
+      current.includes(accountId)
+        ? current.filter((id) => id !== accountId)
+        : [...current, accountId],
+    );
+  }
+
+  async function refreshAccounts() {
+    try {
+      const connected = await actions.connectSocialAccounts();
+      toast(connected ? "Social accounts refreshed." : "No accounts connected in Mallary yet.");
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "Could not load your social accounts.");
+    }
+  }
+
+  /** Exports the current design to a PNG data URL, for a design with no hosted file. */
+  async function exportFrameDataUrl(): Promise<string | null> {
+    const node = frameRef.current;
+    if (!node) return null;
+    try {
+      const size = TEMPLATE_SIZES[form.template];
+      return await toPng(node, { cacheBust: true, pixelRatio: 1080 / size.width });
+    } catch {
+      return null;
+    }
+  }
+
+  async function publish() {
+    if (!postTarget) return;
+    const caption = postCaption.trim();
+    if (!caption) {
+      toast("Write a caption before posting.");
+      return;
+    }
+    if (!postAccounts.length) {
+      toast("Pick at least one account to post to.");
+      return;
+    }
+    if (postMode === "schedule" && !postWhen) {
+      toast("Pick a date and time to schedule the post.");
+      return;
+    }
+
+    setPosting(true);
+    try {
+      let mediaBase64: string | undefined;
+      if (!postTarget.ad.fileUrl) {
+        // No stored file: only the design currently in the frame can be exported.
+        if (postTarget.ad.id !== latestDelivered?.id) {
+          toast("That design has no file to publish yet.");
+          return;
+        }
+        // Export the in-browser design when we can. If the export fails we still
+        // send the request — the gateway uses the stored file when there is one,
+        // and otherwise says exactly what is missing.
+        mediaBase64 = (await exportFrameDataUrl()) ?? undefined;
+      }
+
+      const input: PublishAdInput = {
+        deliveredAdId: postTarget.ad.id,
+        briefId: postTarget.briefId,
+        accountIds: postAccounts,
+        caption,
+        scheduledFor:
+          postMode === "schedule" && postWhen ? new Date(postWhen).toISOString() : null,
+        timezone: postTimezone.trim() || "UTC",
+        mediaBase64,
+        mediaType: "image/png",
+        mediaFilename: `${postTarget.ad.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`,
+      };
+
+      const result = await actions.publishAd(input);
+      toast(
+        result?.scheduledFor
+          ? `Ad scheduled for ${shortDate(result.scheduledFor)}.`
+          : "Ad posted — its status shows in Ads history.",
+      );
+      setPostTarget(null);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "The ad could not be published.");
+    } finally {
+      setPosting(false);
     }
   }
 
@@ -651,20 +833,37 @@ export function PromotionPage() {
               subtitle={TEMPLATE_SIZES[form.template].hint}
               action={
                 designReady ? (
-                  latestDelivered?.fileUrl ? (
-                    <a href={latestDelivered.fileUrl} target="_blank" rel="noreferrer" download className={btnPrimary}>
-                      <Download size={13} /> Export
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      className={btnPrimary}
-                      onClick={() => void downloadPreview()}
-                      disabled={downloading}
-                    >
-                      <Download size={13} /> {downloading ? "Exporting…" : "Download PNG"}
-                    </button>
-                  )
+                  <>
+                    {latestDelivered ? (
+                      <button
+                        type="button"
+                        className={btnPrimary}
+                        onClick={() => openPostAd(latestDelivered)}
+                      >
+                        <Share2 size={13} /> Post ad
+                      </button>
+                    ) : null}
+                    {latestDelivered?.fileUrl ? (
+                      <a
+                        href={latestDelivered.fileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        download
+                        className={btnGhost}
+                      >
+                        <Download size={13} /> Export
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        className={btnGhost}
+                        onClick={() => void downloadPreview()}
+                        disabled={downloading}
+                      >
+                        <Download size={13} /> {downloading ? "Exporting…" : "Download PNG"}
+                      </button>
+                    )}
+                  </>
                 ) : (
                   <Badge tone="warn">In design</Badge>
                 )
@@ -776,15 +975,17 @@ export function PromotionPage() {
                     aria-label={`Remove ${entry.brief.name}`}
                     className="rounded-lg p-1.5 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
                     onClick={() => {
-                      void actions.removePromotionBrief(entry.brief.id);
+                      void actionToast(() => actions.removePromotionBrief(entry.brief.id), {
+                        success: `${entry.brief.name} removed.`,
+                        failure: `${entry.brief.name} could not be removed.`,
+                      });
                       if (entry.brief.id === form.id) setForm({ ...BLANK });
-                      toast(`${entry.brief.name} removed.`);
                     }}
                   >
                     <Trash2 size={14} />
                   </button>
                 </li>
-              ) : (
+              ) : entry.kind === "ad" ? (
                 <li
                   key={`ad-${entry.ad.id}`}
                   className="flex flex-wrap items-center gap-3 px-4 py-3"
@@ -803,6 +1004,13 @@ export function PromotionPage() {
                   <Badge tone="good">
                     <Sparkles size={11} /> Delivered
                   </Badge>
+                  <button
+                    type="button"
+                    className={btnPrimary}
+                    onClick={() => openPostAd(entry.ad)}
+                  >
+                    <Share2 size={13} /> Post ad
+                  </button>
                   {entry.ad.fileUrl ? (
                     <a
                       href={entry.ad.fileUrl}
@@ -826,6 +1034,54 @@ export function PromotionPage() {
                     </button>
                   ) : null}
                 </li>
+              ) : (
+                <li
+                  key={`published-${entry.job.id}`}
+                  className="flex flex-wrap items-center gap-3 px-4 py-3"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                    <Share2 size={15} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900">
+                      {entry.job.status === "queued" && entry.job.scheduledFor
+                        ? `Scheduled for ${shortDate(entry.job.scheduledFor)}`
+                        : "Ad post"}
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {entry.job.platforms.length
+                        ? entry.job.platforms.join(", ")
+                        : "No platforms"}{" "}
+                      · {relativeTime(entry.job.updatedAt)}
+                      {entry.job.error ? ` · ${entry.job.error}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {entry.job.platforms.map((platform) =>
+                      PLATFORM_ICON[platform] ? (
+                        <img
+                          key={platform}
+                          src={PLATFORM_ICON[platform]}
+                          alt={platform}
+                          className="h-3.5 w-3.5 opacity-70"
+                        />
+                      ) : null,
+                    )}
+                  </div>
+                  <Badge tone={PUBLISH_STATUS_META[entry.job.status].tone}>
+                    {PUBLISH_STATUS_META[entry.job.status].label}
+                  </Badge>
+                  {entry.job.permalink ? (
+                    <a
+                      href={entry.job.permalink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={btnGhost}
+                    >
+                      <ExternalLink size={13} /> View post
+                    </a>
+                  ) : null}
+                </li>
               ),
             )}
           </ul>
@@ -833,6 +1089,190 @@ export function PromotionPage() {
           </Card>
         </div>
       </div>
+
+      <Modal
+        open={Boolean(postTarget)}
+        onClose={() => setPostTarget(null)}
+        title="Post ad"
+        subtitle={
+          postTarget ? `Publish “${postTarget.ad.name}” to your connected accounts` : undefined
+        }
+        icon={<Share2 size={16} />}
+        footer={
+          accounts.length === 0 ? (
+            <button type="button" className={btnGhost} onClick={() => setPostTarget(null)}>
+              Close
+            </button>
+          ) : (
+            <>
+              <button type="button" className={btnGhost} onClick={() => setPostTarget(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={() => void publish()}
+                disabled={posting}
+              >
+                {postMode === "schedule" ? <Clock size={13} /> : <Send size={13} />}
+                {posting ? "Publishing…" : postMode === "schedule" ? "Schedule post" : "Publish now"}
+              </button>
+            </>
+          )
+        }
+      >
+        {postTarget ? (
+          <div className="space-y-4 px-4 py-4">
+            <div className="flex items-center justify-center rounded-xl bg-slate-100 px-4 py-4">
+              {postTarget.ad.fileUrl ? (
+                <img
+                  src={postTarget.ad.fileUrl}
+                  alt={postTarget.ad.name}
+                  className="max-h-44 rounded-lg object-contain ring-1 ring-slate-200"
+                />
+              ) : (
+                <p className="text-[11px] text-slate-500">
+                  The design currently in the Ad frame will be exported as a PNG when you post.
+                </p>
+              )}
+            </div>
+
+            {accounts.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-center">
+                <p className="text-sm font-semibold text-slate-800">No accounts connected yet</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Connect your social accounts in Mallary, then refresh here. Accounts are only ever
+                  authorised inside Mallary — this app never asks for your passwords.
+                </p>
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    className={btnPrimary}
+                    onClick={() => void refreshAccounts()}
+                  >
+                    <RefreshCw size={13} /> Refresh from Mallary
+                  </button>
+                  <a
+                    href="https://mallary.ai"
+                    target="_blank"
+                    rel="noreferrer"
+                    className={btnGhost}
+                  >
+                    <ExternalLink size={13} /> Open Mallary
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <p className="mb-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+                    Accounts
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {accounts.map((account) => {
+                      const checked = postAccounts.includes(account.id);
+                      return (
+                        <button
+                          key={account.id}
+                          type="button"
+                          aria-pressed={checked}
+                          onClick={() => togglePostAccount(account.id)}
+                          className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-left transition ${
+                            checked
+                              ? "border-indigo-300 bg-indigo-50/70"
+                              : "border-slate-200 bg-white hover:bg-slate-50"
+                          }`}
+                        >
+                          {PLATFORM_ICON[account.platform] ? (
+                            <img
+                              src={PLATFORM_ICON[account.platform]}
+                              alt=""
+                              className="h-4 w-4"
+                            />
+                          ) : null}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-medium text-slate-900">
+                              {account.displayName}
+                            </span>
+                            {account.handle ? (
+                              <span className="block truncate text-[10px] text-slate-500">
+                                {account.handle}
+                              </span>
+                            ) : null}
+                          </span>
+                          {checked ? <Check size={13} className="text-indigo-600" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <Field label="Caption" hint="Edit the brief's suggested copy before it goes out.">
+                  <textarea
+                    className={inputClass + " min-h-24"}
+                    value={postCaption}
+                    onChange={(event) => setPostCaption(event.target.value)}
+                  />
+                </Field>
+
+                <Field label="When">
+                  <Segmented
+                    value={postMode}
+                    onChange={setPostMode}
+                    options={[
+                      { value: "now", label: "Post now" },
+                      { value: "schedule", label: "Schedule" },
+                    ]}
+                  />
+                </Field>
+
+                {postMode === "schedule" ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Date & time">
+                      <input
+                        type="datetime-local"
+                        className={inputClass}
+                        value={postWhen}
+                        onChange={(event) => setPostWhen(event.target.value)}
+                      />
+                    </Field>
+                    <Field label="Timezone" hint="IANA name, e.g. Africa/Nairobi">
+                      <input
+                        className={inputClass}
+                        value={postTimezone}
+                        onChange={(event) => setPostTimezone(event.target.value)}
+                      />
+                    </Field>
+                  </div>
+                ) : null}
+              </>
+            )}
+
+            {postAttempts.length ? (
+              <div className="rounded-xl bg-slate-50 px-3 py-2">
+                <p className="text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
+                  This design
+                </p>
+                <ul className="mt-1.5 space-y-1">
+                  {postAttempts.map((job) => (
+                    <li
+                      key={job.id}
+                      className="flex items-center justify-between gap-2 text-[11px] text-slate-600"
+                    >
+                      <span>
+                        {job.status === "queued" && job.scheduledFor
+                          ? `Scheduled ${shortDate(job.scheduledFor)}`
+                          : PUBLISH_STATUS_META[job.status].label}
+                      </span>
+                      <span className="text-slate-400">{relativeTime(job.updatedAt)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

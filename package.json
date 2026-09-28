@@ -6,8 +6,8 @@
   "scripts": {
     "test": "vitest run",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && tsc -p tsconfig.functions.json && vite build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.functions.json",
     "preview": "vite preview"
   },
   "repository": {

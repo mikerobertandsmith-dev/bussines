@@ -58,6 +58,47 @@ export interface SocialChannel {
   adsRunning: number;
 }
 
+/**
+ * A competitor's recent public post, pulled by the Apify gateway.
+ *
+ * This is evidence and inspiration — the caption, the numbers it earned and
+ * where it lives. It is never republished as our own creative: every "build our
+ * own" action starts a fresh brief for the user's brand.
+ */
+export interface SocialPost {
+  id: string;
+  competitorId: string;
+  /** Platform key: instagram | tiktok | facebook | x. */
+  platform: string;
+  externalId: string;
+  url: string;
+  caption: string;
+  mediaUrl: string;
+  mediaType: string;
+  hashtags: string[];
+  mentions: string[];
+  likes: number;
+  comments: number;
+  shares: number;
+  views: number;
+  /** (likes + comments) ÷ followers, as a percentage. */
+  engagementRate: number;
+  postedAt: string | null;
+  scrapedAt: string;
+}
+
+/** How the last scrape of one competitor handle went. */
+export interface SocialMonitorTarget {
+  competitorId: string;
+  platform: string;
+  handle: string;
+  actorId: string;
+  cadence: string;
+  lastScrapedAt: string | null;
+  lastRunStatus: string;
+  lastError: string;
+}
+
 export interface KeywordGap {
   keyword: string;
   volume: number;
@@ -189,12 +230,155 @@ export interface MailAccount {
   messageTypes: MessageType[];
 }
 
+/* ---------------- Search visibility (SerpApi) ---------------- */
+
+export type SearchDevice = "desktop" | "mobile";
+
+/** Our Google organic position for a tracked keyword on one device. */
+export interface SerpRanking {
+  keyword: string;
+  device: SearchDevice;
+  location: string;
+  /** null when we are not present in the results we fetched. */
+  position: number | null;
+  url: string;
+  title: string;
+  /** Rich-snippet kind found on our result, empty when none. */
+  snippetType: string;
+  isRichResult: boolean;
+  /** State from the previous scan, for "lost a rich snippet" alerts. */
+  previousPosition: number | null;
+  previousIsRichResult: boolean | null;
+  previousSnippetType: string;
+  checkedAt: string;
+}
+
+/** One entry of the local map 3-pack. */
+export interface LocalPackEntry {
+  position: number;
+  name: string;
+  placeId: string;
+  rating: number;
+  reviews: number;
+}
+
+/** Where we sit in the local map 3-pack for a keyword. */
+export interface LocalPackRanking {
+  keyword: string;
+  location: string;
+  inPack: boolean;
+  /** 1–3 when in the pack, null when we are not. */
+  packPosition: number | null;
+  placeId: string;
+  /** Everyone in the pack, so competitors can be compared later. */
+  pack: LocalPackEntry[];
+  /** State from the previous scan, for "dropped out of the pack" alerts. */
+  previousInPack: boolean | null;
+  previousPackPosition: number | null;
+  checkedAt: string;
+}
+
+/** One Google Business Profile completeness check. */
+export interface LocalProfileCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+/** Google Business Profile health for our own Maps listing. */
+export interface LocalProfileHealth {
+  placeId: string;
+  label: string;
+  score: number;
+  checks: LocalProfileCheck[];
+  reviewsCount: number;
+  averageRating: number;
+  address: string;
+  category: string;
+  website: string;
+  checkedAt: string;
+}
+
+/** A Google Autocomplete suggestion the user can promote to a tracked keyword. */
+export interface KeywordIdea {
+  id: string;
+  seed: string;
+  suggestion: string;
+  relevance: number;
+  source: string;
+  savedAsKeyword: boolean;
+  /**
+   * AI-assigned intent theme, empty until the workspace groups the seed. The
+   * page shows the plain list while this is empty.
+   */
+  cluster: string;
+  createdAt: string;
+}
+
+/**
+ * One original ad angle, drawn from a competitor's best-performing post. A draft
+ * the user picks from — an angle creates nothing on its own.
+ */
+export interface AdAngle {
+  /** Our own line, never a rewording of theirs. */
+  headline: string;
+  /** Why it should work, in a sentence. */
+  rationale: string;
+  /** Catalogue item to build it around, or "" when none fits. */
+  itemHint: string;
+}
+
+/** A theme a seed's keyword suggestions were grouped under. */
+export interface KeywordCluster {
+  name: string;
+  /** informational | commercial | transactional | navigational | mixed */
+  intent: string;
+  /** Always a subset of the suggestions we already hold. */
+  keywords: string[];
+}
+
+/** Share of Voice: how often we and a competitor appear in the Google top 10. */
+export interface ShareOfVoice {
+  competitorId: string;
+  competitorName: string;
+  keywordSet: string;
+  termCount: number;
+  ourTop10: number;
+  theirTop10: number;
+  /** Percent of tracked terms (0–100). */
+  ourShare: number;
+  theirShare: number;
+  /** Our share last scan, for "share of voice crossed a threshold" alerts. */
+  previousOurShare: number | null;
+  checkedAt: string;
+}
+
+/** Competitor Review Gap: the local rating / review-count difference. */
+export interface CompetitorReviewGap {
+  competitorId: string;
+  competitorName: string;
+  placeId: string;
+  ourReviews: number;
+  theirReviews: number;
+  /** Their reviews minus ours — negative means we lead. */
+  reviewGap: number;
+  ourRating: number;
+  theirRating: number;
+  /** Our rating minus theirs — positive means we lead. */
+  ratingGap: number;
+  /** The gap last benchmark, for the "gap widened" alert. */
+  previousReviewGap: number | null;
+  checkedAt: string;
+}
+
 /* ---------------- My business ---------------- */
 
 export interface RankRow {
   keyword: string;
   volume: number;
-  position: number;
+  /** null when we are not in the results we fetched (or have not scanned it yet). */
+  position: number | null;
+  /** Positions gained since the previous scan — negative means we slipped. */
   change: number;
 }
 
@@ -359,6 +543,45 @@ export interface DeliveredAd {
   deliveredAt: string;
 }
 
+/* ---------------- Social publishing (Mallary) ---------------- */
+
+/**
+ * One social account the user has connected through Mallary. Accounts are
+ * connected inside Mallary's own flow; this mirrors what the provider reports.
+ */
+export interface SocialAccount {
+  id: string;
+  provider: IntegrationProvider;
+  /** facebook | instagram | x | tiktok | linkedin | youtube | pinterest… */
+  platform: string;
+  displayName: string;
+  handle: string;
+  avatarUrl: string;
+  status: IntegrationConnectionState;
+  connectedAt: string;
+}
+
+/** Where a published ad sits in the provider's lifecycle. */
+export type PublishJobStatus = "queued" | "publishing" | "published" | "partial" | "failed";
+
+/** One push of a finished design to the user's social accounts. */
+export interface SocialPublishJob {
+  id: string;
+  briefId: string | null;
+  deliveredAdId: string | null;
+  accountIds: string[];
+  platforms: string[];
+  caption: string;
+  scheduledFor: string | null;
+  timezone: string;
+  status: PublishJobStatus;
+  providerJobId: string;
+  permalink: string;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WeeklyReport {
   week: string;
   seoScore: number;
@@ -438,6 +661,35 @@ export interface MyReview {
   sentiment: "positive" | "neutral" | "negative";
   action: string;
   isFlagged?: boolean;
+  /** The reader's own review id, empty for reviews captured before Phase 3. */
+  externalId: string;
+  /** Platform key: google | yelp | g2 | trustpilot | capterra | tripadvisor. */
+  platform: string;
+  /** ISO 639-1 language the review was written in. */
+  language: string;
+  /** True once a reply has been sent (or the provider reported one). */
+  replied: boolean;
+  /** The reply we sent, when there is one. */
+  replyText: string;
+  repliedAt: string | null;
+}
+
+/**
+ * A review profile we monitor, tracked by its public handle or URL — no login on
+ * the reviewed platform is required.
+ */
+export interface ReviewConnection {
+  id: string;
+  provider: IntegrationProvider;
+  /** Platform key: google | yelp | g2 | trustpilot | capterra | tripadvisor. */
+  platform: string;
+  /** Public URL or company slug the provider tracks. */
+  handle: string;
+  label: string;
+  status: IntegrationConnectionState;
+  lastSyncedAt: string | null;
+  lastError: string;
+  createdAt: string;
 }
 
 export interface ReviewScan {
@@ -475,6 +727,81 @@ export interface ClientSeedInput {
   company: string;
   frequency: SendFrequency;
   messageTypes: MessageType[];
+}
+
+/* ---------------- Integrations ---------------- */
+
+/**
+ * External providers wired into the workspace via the Edge Function gateway.
+ *
+ * `reviews` is not a vendor: it is review monitoring assembled from the serpapi
+ * and apify readers, so it is configured by either of those keys rather than one
+ * of its own.
+ *
+ * `llm` is the drafting model behind the AI enrichment (reply drafts, ad angles,
+ * keyword clusters). It is configured by GROQ_API_KEY, but the endpoint and model
+ * are settings (LLM_BASE_URL, LLM_MODEL), so any OpenAI-compatible provider can
+ * replace it without the app changing.
+ */
+export type IntegrationProvider = "serpapi" | "apify" | "reviews" | "mallary" | "llm";
+
+/** What a saved connection represents for its provider. */
+export type IntegrationKind = "social_account" | "review_profile" | "maps_place" | "actor";
+
+/** A saved connection's health. `needs_reauth` means the user must reconnect. */
+export type IntegrationConnectionState = "active" | "needs_reauth" | "disabled";
+
+/**
+ * One external connection a tenant has set up — a Mallary social account, a
+ * monitored review profile, a SerpApi Maps place or an Apify actor target.
+ * Never holds secrets; those stay in the Edge Function environment.
+ */
+export interface IntegrationConnection {
+  id: string;
+  provider: IntegrationProvider;
+  kind: IntegrationKind;
+  externalId: string;
+  label: string;
+  handle: string;
+  status: IntegrationConnectionState;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Provider calls aggregated for a tenant, for the usage/cost readout. */
+export interface ApiUsage {
+  provider: IntegrationProvider;
+  requests: number;
+  units: number;
+  costUsd: number;
+  /** Calls that ended in an error, so the rate can be surfaced. */
+  errors: number;
+}
+
+/**
+ * What the Integrations panel renders: the provider catalogue plus this
+ * tenant's connection count and recorded usage. `configured` comes from the
+ * server (whether the Edge Functions hold a key) and is always false in demo.
+ */
+export interface ProviderStatus {
+  provider: IntegrationProvider;
+  label: string;
+  description: string;
+  /** Environment variables the server needs before this provider can run. */
+  envKeys: string[];
+  configured: boolean;
+  connections: number;
+  requests: number;
+  costUsd: number;
+  /** Billable units recorded this month (searches / profile syncs / posts). */
+  units: number;
+  /** Calls that ended in an error this month, so a provider's failure rate is visible. */
+  errors: number;
+  /** Monthly unit allowance, 0 when uncapped. */
+  cap: number;
+  /** Monthly dollar allowance, 0 when uncapped. */
+  capUsd: number;
 }
 
 /** Everything the onboarding wizard collects. */
@@ -518,6 +845,24 @@ export interface WorkspaceData {
   sentMessages: SentMessage[];
   topSeoKeywords: RankRow[];
   topGeoKeywords: GeoRankRow[];
+  /** Google organic positions, one row per keyword × device. */
+  serpRankings: SerpRanking[];
+  /** Local map 3-pack positions per keyword. */
+  localPackRankings: LocalPackRanking[];
+  /** Our Google Business Profile health, null until the first local scan. */
+  localProfileHealth: LocalProfileHealth | null;
+  /** Autocomplete suggestions found but not yet tracked. */
+  keywordIdeas: KeywordIdea[];
+  /** Share of Voice vs each competitor over the tracked keyword set. */
+  shareOfVoice: ShareOfVoice[];
+  /** Local rating / review-count gap vs each competitor. */
+  competitorReviewGaps: CompetitorReviewGap[];
+  /** Review profiles the workspace monitors. */
+  reviewConnections: ReviewConnection[];
+  /** Recent public posts pulled from each competitor's social profiles. */
+  socialPosts: SocialPost[];
+  /** Scrape state per monitored competitor handle. */
+  socialMonitorTargets: SocialMonitorTarget[];
   geoVisibility: TrafficPoint[];
   weeklyReports: WeeklyReport[];
   reviewSources: ReviewSource[];
@@ -530,8 +875,18 @@ export interface WorkspaceData {
   promotionBriefs: PromotionBrief[];
   /** Finished ad designs we have produced and pushed back to them. */
   deliveredAds: DeliveredAd[];
+  /** Social accounts the user has connected for publishing. */
+  socialAccounts: SocialAccount[];
+  /** Every push of a delivered design to those accounts. */
+  publishJobs: SocialPublishJob[];
   buyList: string[];
   scanRuns: ScanRun[];
+  /** External connections the tenant has saved (social accounts, review profiles…). */
+  integrationConnections: IntegrationConnection[];
+  /** Provider availability, connection counts and spend for the Integrations panel. */
+  providerStatus: ProviderStatus[];
+  /** Recorded provider calls, aggregated per provider. */
+  apiUsage: ApiUsage[];
   /** True while the workspace has no monitored data of its own yet. */
   isSample: boolean;
 }

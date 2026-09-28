@@ -1,5 +1,11 @@
 import { daysAgo } from "../lib/format";
-import type { DeliveredAd, InventoryItem, PromotionBrief } from "../lib/types";
+import type {
+  DeliveredAd,
+  InventoryItem,
+  PromotionBrief,
+  SocialAccount,
+  SocialPublishJob,
+} from "../lib/types";
 
 /**
  * Sample catalogue for demo mode and before a real catalogue is entered. The
@@ -174,5 +180,82 @@ export const deliveredAds: DeliveredAd[] = [
     downloads: 4,
     note: "Delivered as a 1080 × 1080 PNG, ready to post.",
     deliveredAt: daysAgo(1),
+  },
+];
+
+/**
+ * Sample connected accounts so the Post-ad modal is explorable in demo mode.
+ * Real accounts are connected inside Mallary and mirrored by `social-accounts`.
+ */
+export const sampleSocialAccounts: SocialAccount[] = [
+  {
+    id: "sa-instagram",
+    provider: "mallary",
+    platform: "instagram",
+    displayName: "Instagram",
+    handle: "@yourretailbrand",
+    avatarUrl: "",
+    status: "active",
+    connectedAt: daysAgo(26),
+  },
+  {
+    id: "sa-facebook",
+    provider: "mallary",
+    platform: "facebook",
+    displayName: "Facebook Page",
+    handle: "YourRetailBrand",
+    avatarUrl: "",
+    status: "active",
+    connectedAt: daysAgo(26),
+  },
+  {
+    id: "sa-x",
+    provider: "mallary",
+    platform: "x",
+    displayName: "X",
+    handle: "@yourretailbrand",
+    avatarUrl: "",
+    status: "active",
+    connectedAt: daysAgo(18),
+  },
+];
+
+/**
+ * Sample publishing history: one published post (so the timeline shows the
+ * `published` state and its permalink) and one that failed (so the failure
+ * alert has something to fire on).
+ */
+export const samplePublishJobs: SocialPublishJob[] = [
+  {
+    id: "pj-1",
+    briefId: "brief-1",
+    deliveredAdId: "ad-1",
+    accountIds: ["sa-instagram", "sa-facebook"],
+    platforms: ["instagram", "facebook"],
+    caption: "Weekend beauty sale — 28% off the velvet lip kit with code GLOW28.",
+    scheduledFor: null,
+    timezone: "Africa/Nairobi",
+    status: "published",
+    providerJobId: "mj-1001",
+    permalink: "https://www.instagram.com/p/example-ad/",
+    error: "",
+    createdAt: daysAgo(0, 20),
+    updatedAt: daysAgo(0, 19),
+  },
+  {
+    id: "pj-2",
+    briefId: "brief-2",
+    deliveredAdId: null,
+    accountIds: ["sa-x"],
+    platforms: ["x"],
+    caption: "New season linen, free returns.",
+    scheduledFor: daysAgo(0, 6),
+    timezone: "Africa/Nairobi",
+    status: "failed",
+    providerJobId: "mj-1002",
+    permalink: "",
+    error: "X rejected the media — images must be hosted and under 5 MB.",
+    createdAt: daysAgo(0, 7),
+    updatedAt: daysAgo(0, 6),
   },
 ];

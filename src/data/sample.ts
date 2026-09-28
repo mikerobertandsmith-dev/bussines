@@ -1,9 +1,11 @@
-import { adAssets, geoVisibility, inventoryRecommendations, latestReviewScan, myBusiness, reviewSources, socialScores, topGeoKeywords, topSeoKeywords, weeklyReports } from "./business";
+import { adAssets, competitorReviewGaps, geoVisibility, inventoryRecommendations, keywordIdeas, latestReviewScan, localPackRankings, localProfileHealth, myBusiness, reviewConnections, reviewSources, serpRankings, shareOfVoice, socialScores, topGeoKeywords, topSeoKeywords, weeklyReports } from "./business";
 import { clients, mailAccount, sentMessages } from "./clients";
 import { competitors } from "./competitors";
 import { suppliers, supplierItems } from "./suppliers";
-import { deliveredAds, inventoryItems, promotionBriefs } from "./commerce";
+import { deliveredAds, inventoryItems, promotionBriefs, samplePublishJobs, sampleSocialAccounts } from "./commerce";
+import { socialMonitorTargets, socialPosts } from "./social";
 import { daysAhead } from "../lib/format";
+import { buildProviderStatus } from "../lib/integrations";
 import type { BusinessMetrics, BusinessProfile, TrafficPoint, WorkspaceData } from "../lib/types";
 
 /** Business-level numbers live on the profile row; series come from metrics rows. */
@@ -90,9 +92,18 @@ export function sampleWorkspace(profile: BusinessProfile = sampleProfile): Works
     sentMessages,
     topSeoKeywords,
     topGeoKeywords,
+    serpRankings,
+    localPackRankings,
+    localProfileHealth,
+    keywordIdeas,
+    shareOfVoice,
+    competitorReviewGaps,
+    socialPosts,
+    socialMonitorTargets,
     geoVisibility,
     weeklyReports,
     reviewSources,
+    reviewConnections,
     latestReviewScan: {
       scannedAt: latestReviewScan.scannedAt,
       nextScanAt: daysAhead(1),
@@ -110,8 +121,16 @@ export function sampleWorkspace(profile: BusinessProfile = sampleProfile): Works
     inventory: inventoryItems,
     promotionBriefs,
     deliveredAds,
+    socialAccounts: sampleSocialAccounts,
+    publishJobs: samplePublishJobs,
     buyList: [],
     scanRuns: [],
+    // No provider credentials in demo mode, so every integration shows as
+    // unconfigured with the connect prompt — the same shape as a live tenant
+    // that has not added its keys yet.
+    integrationConnections: [],
+    providerStatus: buildProviderStatus({ connections: [], usage: [], config: {} }),
+    apiUsage: [],
     isSample: true,
   };
 }

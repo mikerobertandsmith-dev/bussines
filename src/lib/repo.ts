@@ -2,27 +2,44 @@ import { requireSupabase } from "./supabase";
 import { nextScanFrom, nextSendFrom } from "./schedule";
 import type {
   AdAsset,
+  ApiUsage,
   BusinessMetrics,
   BusinessProfile,
   Client,
   Competitor,
   CompetitorItem,
   CompetitorReview,
+  CompetitorReviewGap,
   GeoRankRow,
   InventoryItem,
+  IntegrationConnection,
+  IntegrationProvider,
   InventoryRecommendation,
+  KeywordIdea,
+  LocalPackEntry,
+  LocalPackRanking,
+  LocalProfileCheck,
+  LocalProfileHealth,
   MailAccount,
   MessageType,
   MyReview,
   OnboardingInput,
   DeliveredAd,
   PromotionBrief,
+  ProviderStatus,
   RankRow,
+  ReviewConnection,
   ReviewScan,
   ReviewSource,
   ScanRun,
   SendFrequency,
   SentMessage,
+  SerpRanking,
+  ShareOfVoice,
+  SocialAccount,
+  SocialMonitorTarget,
+  SocialPost,
+  SocialPublishJob,
   SocialChannel,
   SocialScore,
   Supplier,
@@ -32,6 +49,9 @@ import type {
   WorkspaceData,
 } from "./types";
 import type { Cadence, KeywordGap, AdCreative, AudienceSlice } from "./types";
+import { buildProviderStatus, fetchProviderConfig } from "./integrations";
+import { mergeSeoRankings } from "./rankings";
+import { normaliseSocialHandle, socialPlatformOf } from "./social";
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -53,6 +73,12 @@ function rows<T>(response: { data: unknown; error: { message: string } | null })
 
 function orderBySort(list: Row[]): Row[] {
   return [...list].sort((a, b) => num(a.sort_order) - num(b.sort_order));
+}
+
+/** A stored rank of 0 means "not ranked yet" — keep that distinct from "#0". */
+function rankOrNull(value: unknown): number | null {
+  const parsed = num(value);
+  return parsed > 0 ? parsed : null;
 }
 
 const EMPTY_METRICS: BusinessMetrics = {
@@ -237,6 +263,19 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     inventoryRes,
     promotionsRes,
     deliveredAdsRes,
+    integrationConnectionsRes,
+    apiUsageRes,
+    serpRankingsRes,
+    localPackRes,
+    localProfileRes,
+    keywordIdeasRes,
+    shareOfVoiceRes,
+    competitorReviewGapRes,
+    socialPostsRes,
+    socialTargetsRes,
+    reviewConnectionsRes,
+    socialAccountsRes,
+    publishJobsRes,
   ] = await Promise.all([
     db.from("suppliers").select("*").eq("business_id", id).order("name"),
     db.from("supplier_items").select("*").eq("business_id", id).order("detected_at", { ascending: false }).limit(300),
@@ -265,6 +304,19 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     db.from("inventory_items").select("*").eq("business_id", id).order("created_at", { ascending: false }),
     db.from("promotion_briefs").select("*").eq("business_id", id).order("updated_at", { ascending: false }),
     db.from("delivered_ads").select("*").eq("business_id", id).order("delivered_at", { ascending: false }),
+    db.from("integration_connections").select("*").eq("business_id", id).order("created_at", { ascending: false }),
+    db.from("api_usage_log").select("*").eq("business_id", id).order("created_at", { ascending: false }).limit(1000),
+    db.from("serp_rankings").select("*").eq("business_id", id).order("checked_at", { ascending: false }),
+    db.from("local_pack_rankings").select("*").eq("business_id", id).order("checked_at", { ascending: false }),
+    db.from("local_profile_health").select("*").eq("business_id", id).limit(1),
+    db.from("keyword_ideas").select("*").eq("business_id", id).order("relevance", { ascending: false }).limit(50),
+    db.from("competitor_share_of_voice").select("*").eq("business_id", id),
+    db.from("competitor_review_gap").select("*").eq("business_id", id),
+    db.from("social_posts").select("*").eq("business_id", id).order("posted_at", { ascending: false }).limit(300),
+    db.from("social_monitor_targets").select("*").eq("business_id", id),
+    db.from("review_connections").select("*").eq("business_id", id).order("created_at", { ascending: true }),
+    db.from("social_accounts").select("*").eq("business_id", id).order("platform"),
+    db.from("social_publish_jobs").select("*").eq("business_id", id).order("created_at", { ascending: false }).limit(100),
   ]);
 
   const supplierRows = rows<Row>(suppliersRes);
@@ -284,6 +336,33 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
   const reviewSeriesRows = rows<Row>(reviewSeriesRes);
   const myReviewRows = rows<Row>(myReviewsRes);
   const scanRows = rows<Row>(scanRunsRes);
+
+  const integrationConnections = rows<Row>(integrationConnectionsRes).map(mapIntegrationConnection);
+  const apiUsage = rows<Row>(apiUsageRes).map(mapApiUsageRow);
+  const serpRankings = rows<Row>(serpRankingsRes).map(mapSerpRanking);
+  const localPackRankings = rows<Row>(localPackRes).map(mapLocalPackRanking);
+  const localProfileRow = rows<Row>(localProfileRes)[0];
+  const localProfileHealth: LocalProfileHealth | null = localProfileRow
+    ? mapLocalProfileHealth(localProfileRow)
+    : null;
+  const keywordIdeaRows = rows<Row>(keywordIdeasRes).map(mapKeywordIdea);
+  const shareOfVoice = rows<Row>(shareOfVoiceRes).map(mapShareOfVoice);
+  const competitorReviewGaps = rows<Row>(competitorReviewGapRes).map(mapCompetitorReviewGap);
+  // Newest first, with posts that arrived without a timestamp last.
+  const socialPosts = rows<Row>(socialPostsRes)
+    .map(mapSocialPost)
+    .sort((a, b) => (b.postedAt ?? b.scrapedAt).localeCompare(a.postedAt ?? a.scrapedAt));
+  const socialMonitorTargets = rows<Row>(socialTargetsRes).map(mapSocialMonitorTarget);
+  const reviewConnections = rows<Row>(reviewConnectionsRes).map(mapReviewConnection);
+  const socialAccounts = rows<Row>(socialAccountsRes).map(mapSocialAccount);
+  const publishJobs = rows<Row>(publishJobsRes).map(mapSocialPublishJob);
+  // Which providers the server actually holds credentials for. Best effort — an
+  // undeployed gateway simply reports everything as unconfigured.
+  const providerStatus = buildProviderStatus({
+    connections: integrationConnections,
+    usage: apiUsage,
+    config: await fetchProviderConfig(),
+  });
 
   const competitors: Competitor[] = competitorRows.map((c) => {
     const related = (list: Row[]) => list.filter((r) => r.competitor_id === c.id);
@@ -314,14 +393,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         label: str(m.label),
         share: num(m.value),
       })),
-      social: related(socialRows).map<SocialChannel>((s) => ({
-        platform: str(s.platform),
-        handle: str(s.handle),
-        followers: num(s.followers),
-        engagementRate: num(s.engagement_rate),
-        postsPerWeek: num(s.posts_per_week),
-        adsRunning: num(s.ads_running),
-      })),
+      social: related(socialRows).map<SocialChannel>(mapSocialChannel),
       keywordGap: related(keywordRows).map<KeywordGap>((k) => ({
         keyword: str(k.keyword),
         volume: num(k.volume),
@@ -434,6 +506,12 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
       sentiment: (r.sentiment ?? "neutral") as MyReview["sentiment"],
       action: str(r.action),
       isFlagged: Boolean(r.is_flagged),
+      externalId: str(r.external_id),
+      platform: str(r.platform),
+      language: str(r.language),
+      replied: Boolean(r.replied),
+      replyText: str(r.reply_text),
+      repliedAt: r.replied_at ? str(r.replied_at) : null,
     })),
   };
 
@@ -525,15 +603,19 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
       sentAt: str(m.sent_at, new Date().toISOString()),
       status: (m.status ?? "delivered") as SentMessage["status"],
     })),
-    topSeoKeywords: myKeywordRows
-      .filter((k) => (k.kind ?? "seo") === "seo")
-      .map<RankRow>((k) => ({
-        keyword: str(k.keyword),
-        volume: num(k.volume),
-        position: num(k.position),
-        change: num(k.change),
-      }))
-      .sort((a, b) => a.position - b.position),
+    // Tracked terms carry the live positions from the last Google scan, so the
+    // SEO tab shows where we actually sit rather than the stored placeholder.
+    topSeoKeywords: mergeSeoRankings(
+      myKeywordRows
+        .filter((k) => (k.kind ?? "seo") === "seo")
+        .map<RankRow>((k) => ({
+          keyword: str(k.keyword),
+          volume: num(k.volume),
+          position: rankOrNull(k.position),
+          change: num(k.change),
+        })),
+      serpRankings,
+    ),
     topGeoKeywords: myKeywordRows
       .filter((k) => k.kind === "geo")
       .map<GeoRankRow>((k) => ({
@@ -543,6 +625,14 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         change: num(k.change),
       }))
       .sort((a, b) => a.position - b.position),
+    serpRankings,
+    localPackRankings,
+    localProfileHealth,
+    keywordIdeas: keywordIdeaRows,
+    shareOfVoice,
+    competitorReviewGaps,
+    socialPosts,
+    socialMonitorTargets,
     geoVisibility: orderBySort(myMetricRows.filter((m) => m.kind === "geo_visibility")).map((m) => ({
       label: str(m.label),
       visits: num(m.value),
@@ -558,6 +648,9 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     })),
     reviewSources,
     latestReviewScan,
+    reviewConnections,
+    socialAccounts,
+    publishJobs,
     adAssets: rows<Row>(adAssetsRes).map<AdAsset>((a) => ({
       id: a.id,
       product: str(a.product),
@@ -653,6 +746,9 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
       startedAt: str(r.started_at, new Date().toISOString()),
       finishedAt: str(r.finished_at) || null,
     })),
+    integrationConnections,
+    providerStatus,
+    apiUsage,
     isSample: supplierRows.length === 0 && competitorRows.length === 0 && clientRows.length === 0,
   };
 
@@ -1091,7 +1187,443 @@ export async function deletePromotionBrief(briefId: string) {
   if (error) throw new Error(error.message);
 }
 
+/* --------------------------------------------------------- search visibility */
+
+function mapSerpRanking(row: Row): SerpRanking {
+  return {
+    keyword: str(row.keyword),
+    device: (row.device ?? "desktop") as SerpRanking["device"],
+    location: str(row.location),
+    position: row.position === null || row.position === undefined ? null : num(row.position),
+    url: str(row.url),
+    title: str(row.title),
+    snippetType: str(row.snippet_type),
+    isRichResult: Boolean(row.is_rich_result),
+    previousPosition:
+      row.previous_position === null || row.previous_position === undefined
+        ? null
+        : num(row.previous_position),
+    previousIsRichResult:
+      row.previous_is_rich_result === null || row.previous_is_rich_result === undefined
+        ? null
+        : Boolean(row.previous_is_rich_result),
+    previousSnippetType: str(row.previous_snippet_type),
+    checkedAt: str(row.checked_at, new Date().toISOString()),
+  };
+}
+
+function mapLocalPackRanking(row: Row): LocalPackRanking {
+  return {
+    keyword: str(row.keyword),
+    location: str(row.location),
+    inPack: Boolean(row.in_pack),
+    packPosition:
+      row.pack_position === null || row.pack_position === undefined
+        ? null
+        : num(row.pack_position),
+    placeId: str(row.place_id),
+    pack: Array.isArray(row.pack) ? (row.pack as LocalPackEntry[]) : [],
+    previousInPack:
+      row.previous_in_pack === null || row.previous_in_pack === undefined
+        ? null
+        : Boolean(row.previous_in_pack),
+    previousPackPosition:
+      row.previous_pack_position === null || row.previous_pack_position === undefined
+        ? null
+        : num(row.previous_pack_position),
+    checkedAt: str(row.checked_at, new Date().toISOString()),
+  };
+}
+
+function mapLocalProfileHealth(row: Row): LocalProfileHealth {
+  return {
+    placeId: str(row.place_id),
+    label: str(row.label),
+    score: num(row.score),
+    checks: Array.isArray(row.checks) ? (row.checks as LocalProfileCheck[]) : [],
+    reviewsCount: num(row.reviews_count),
+    averageRating: num(row.average_rating),
+    address: str(row.address),
+    category: str(row.category),
+    website: str(row.website),
+    checkedAt: str(row.checked_at, new Date().toISOString()),
+  };
+}
+
+function mapKeywordIdea(row: Row): KeywordIdea {
+  return {
+    id: str(row.id),
+    seed: str(row.seed),
+    suggestion: str(row.suggestion),
+    relevance: num(row.relevance),
+    source: str(row.source, "autocomplete"),
+    savedAsKeyword: Boolean(row.saved_as_keyword),
+    // Empty until the seed has been grouped, which is what the page groups on.
+    cluster: str(row.cluster),
+    createdAt: str(row.created_at, new Date().toISOString()),
+  };
+}
+
+function mapShareOfVoice(row: Row): ShareOfVoice {
+  return {
+    competitorId: str(row.competitor_id),
+    competitorName: str(row.competitor_name),
+    keywordSet: str(row.keyword_set, "tracked"),
+    termCount: num(row.term_count),
+    ourTop10: num(row.our_top10),
+    theirTop10: num(row.their_top10),
+    ourShare: num(row.our_share),
+    theirShare: num(row.their_share),
+    previousOurShare:
+      row.previous_our_share === null || row.previous_our_share === undefined
+        ? null
+        : num(row.previous_our_share),
+    checkedAt: str(row.checked_at, new Date().toISOString()),
+  };
+}
+
+function mapSocialPost(row: Row): SocialPost {
+  return {
+    id: str(row.id),
+    competitorId: str(row.competitor_id),
+    platform: str(row.platform),
+    externalId: str(row.external_id),
+    url: str(row.url),
+    caption: str(row.caption),
+    mediaUrl: str(row.media_url),
+    mediaType: str(row.media_type),
+    hashtags: Array.isArray(row.hashtags) ? (row.hashtags as string[]) : [],
+    mentions: Array.isArray(row.mentions) ? (row.mentions as string[]) : [],
+    likes: num(row.likes),
+    comments: num(row.comments),
+    shares: num(row.shares),
+    views: num(row.views),
+    engagementRate: num(row.engagement_rate),
+    postedAt: row.posted_at ? str(row.posted_at) : null,
+    scrapedAt: str(row.scraped_at, new Date().toISOString()),
+  };
+}
+
+function mapSocialMonitorTarget(row: Row): SocialMonitorTarget {
+  return {
+    competitorId: str(row.competitor_id),
+    platform: str(row.platform),
+    handle: str(row.handle),
+    actorId: str(row.actor_id),
+    cadence: str(row.cadence, "weekly"),
+    lastScrapedAt: row.last_scraped_at ? str(row.last_scraped_at) : null,
+    lastRunStatus: str(row.last_run_status),
+    lastError: str(row.last_error),
+  };
+}
+
+function mapCompetitorReviewGap(row: Row): CompetitorReviewGap {
+  return {
+    competitorId: str(row.competitor_id),
+    competitorName: str(row.competitor_name),
+    placeId: str(row.place_id),
+    ourReviews: num(row.our_reviews),
+    theirReviews: num(row.their_reviews),
+    reviewGap: num(row.review_gap),
+    ourRating: num(row.our_rating),
+    theirRating: num(row.their_rating),
+    ratingGap: num(row.rating_gap),
+    previousReviewGap:
+      row.previous_review_gap === null || row.previous_review_gap === undefined
+        ? null
+        : num(row.previous_review_gap),
+    checkedAt: str(row.checked_at, new Date().toISOString()),
+  };
+}
+
+function mapSocialAccount(row: Row): SocialAccount {
+  return {
+    id: str(row.id),
+    provider: (row.provider ?? "mallary") as SocialAccount["provider"],
+    platform: str(row.platform),
+    displayName: str(row.display_name, str(row.platform)),
+    handle: str(row.handle),
+    avatarUrl: str(row.avatar_url),
+    status: (row.status ?? "active") as SocialAccount["status"],
+    connectedAt: str(row.connected_at, new Date().toISOString()),
+  };
+}
+
+function mapSocialPublishJob(row: Row): SocialPublishJob {
+  return {
+    id: str(row.id),
+    briefId: row.brief_id ? str(row.brief_id) : null,
+    deliveredAdId: row.delivered_ad_id ? str(row.delivered_ad_id) : null,
+    accountIds: Array.isArray(row.account_ids) ? (row.account_ids as string[]) : [],
+    platforms: Array.isArray(row.platforms) ? (row.platforms as string[]) : [],
+    caption: str(row.caption),
+    scheduledFor: row.scheduled_for ? str(row.scheduled_for) : null,
+    timezone: str(row.timezone),
+    status: (row.status ?? "queued") as SocialPublishJob["status"],
+    providerJobId: str(row.provider_job_id),
+    permalink: str(row.permalink),
+    error: str(row.error),
+    createdAt: str(row.created_at, new Date().toISOString()),
+    updatedAt: str(row.updated_at, new Date().toISOString()),
+  };
+}
+
+function mapReviewConnection(row: Row): ReviewConnection {
+  return {
+    id: str(row.id),
+    provider: (row.provider ?? "reviews") as ReviewConnection["provider"],
+    platform: str(row.platform),
+    handle: str(row.handle),
+    label: str(row.label),
+    status: (row.status ?? "active") as ReviewConnection["status"],
+    lastSyncedAt: row.last_synced_at ? str(row.last_synced_at) : null,
+    lastError: str(row.last_error),
+    createdAt: str(row.created_at, new Date().toISOString()),
+  };
+}
+
+/** Promotes an autocomplete suggestion into the tenant's tracked SEO keywords. */
+export async function saveKeywordIdea(
+  businessId: string,
+  idea: { id: string; suggestion: string },
+): Promise<void> {
+  const db = requireSupabase();
+  const { error: ideaError } = await db
+    .from("keyword_ideas")
+    .update({ saved_as_keyword: true })
+    .eq("id", idea.id);
+  if (ideaError) throw new Error(ideaError.message);
+
+  const { error } = await db.from("my_keywords").insert({
+    business_id: businessId,
+    keyword: idea.suggestion,
+    kind: "seo",
+    volume: 0,
+    position: 0,
+    change: 0,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/* ------------------------------------------------------------ integrations */
+
+function mapApiUsageRow(row: Row): ApiUsage {
+  return {
+    provider: (row.provider ?? "serpapi") as IntegrationProvider,
+    // One log row is one provider request; totals are summed downstream.
+    requests: 1,
+    units: num(row.units, 1),
+    costUsd: num(row.cost_usd),
+    errors: row.status === "error" ? 1 : 0,
+  };
+}
+
+function mapIntegrationConnection(row: Row): IntegrationConnection {
+  return {
+    id: str(row.id),
+    provider: (row.provider ?? "serpapi") as IntegrationProvider,
+    kind: (row.kind ?? "actor") as IntegrationConnection["kind"],
+    externalId: str(row.external_id),
+    label: str(row.label),
+    handle: str(row.handle),
+    status: (row.status ?? "active") as IntegrationConnection["status"],
+    meta: (row.meta ?? {}) as Record<string, unknown>,
+    createdAt: str(row.created_at, new Date().toISOString()),
+    updatedAt: str(row.updated_at, new Date().toISOString()),
+  };
+}
+
+/** Saved external connections for a tenant, newest first. */
+export async function listConnections(businessId: string): Promise<IntegrationConnection[]> {
+  const db = requireSupabase();
+  const { data, error } = await db
+    .from("integration_connections")
+    .select("*")
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((row) => mapIntegrationConnection(row as Row));
+}
+
+/** Provider availability, connection counts and spend, without a full reload. */
+export async function integrationUsage(businessId: string): Promise<ProviderStatus[]> {
+  const db = requireSupabase();
+  const [connectionsRes, usageRes] = await Promise.all([
+    db.from("integration_connections").select("*").eq("business_id", businessId),
+    db
+      .from("api_usage_log")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: false })
+      .limit(1000),
+  ]);
+  return buildProviderStatus({
+    connections: rows<Row>(connectionsRes).map(mapIntegrationConnection),
+    usage: rows<Row>(usageRes).map(mapApiUsageRow),
+    config: await fetchProviderConfig(),
+  });
+}
+
+/* --------------------------------------------------------- review profiles */
+
+/**
+ * Connects a review profile. Profiles are addressed by their public handle or
+ * URL, so the reviewed platform never has to authorise anything.
+ *
+ * The row is also mirrored into `integration_connections` (kind `review_profile`)
+ * so the Integrations panel counts it alongside the other providers, while
+ * `review_connections` stays the table the sync function reads.
+ */
+export async function saveReviewConnection(
+  businessId: string,
+  input: { platform: string; handle: string; label?: string },
+): Promise<ReviewConnection> {
+  const db = requireSupabase();
+  const platform = input.platform.trim().toLowerCase();
+  const handle = input.handle.trim();
+  if (!platform) throw new Error("Pick a review platform.");
+  if (!handle) throw new Error("Add the profile's public URL or handle.");
+  const label = (input.label ?? "").trim() || `${platform} profile`;
+
+  const { data, error } = await db
+    .from("review_connections")
+    .upsert(
+      { business_id: businessId, provider: "reviews", platform, handle, label },
+      { onConflict: "business_id,provider,platform,handle" },
+    )
+    .select()
+    .single();
+  if (error || !data) throw new Error(error?.message ?? "Could not connect that review profile.");
+
+  await db.from("integration_connections").upsert(
+    {
+      business_id: businessId,
+      provider: "reviews",
+      kind: "review_profile",
+      external_id: `${platform}:${handle}`,
+      label,
+      handle,
+      status: "active",
+    },
+    { onConflict: "business_id,provider,kind,external_id" },
+  );
+
+  return mapReviewConnection(data as Row);
+}
+
+/** Disconnects a review profile and its mirror in the Integrations panel. */
+export async function deleteReviewConnection(connectionId: string) {
+  const db = requireSupabase();
+  const { data } = await db
+    .from("review_connections")
+    .select("business_id, platform, handle")
+    .eq("id", connectionId)
+    .maybeSingle();
+
+  const { error } = await db.from("review_connections").delete().eq("id", connectionId);
+  if (error) throw new Error(error.message);
+
+  if (data) {
+    await db
+      .from("integration_connections")
+      .delete()
+      .eq("business_id", data.business_id)
+      .eq("provider", "reviews")
+      .eq("kind", "review_profile")
+      .eq("external_id", `${String(data.platform)}:${String(data.handle)}`);
+  }
+}
+
+/* ------------------------------------------------- competitor social handles */
+
+/**
+ * Declares one competitor handle to monitor. `social-scan` scrapes exactly the
+ * rows in this table, so saving one is what turns a competitor's Instagram,
+ * TikTok, Facebook or X profile into a scrape target — without a row here the
+ * scan reports nothing to do.
+ *
+ * One row per competitor per platform (the unique index added in
+ * `0016_competitor_social_handles.sql`): saving a platform that is already
+ * tracked replaces its handle rather than stacking a second target.
+ *
+ * The handle is normalised to the bare username first. The gateway strips a
+ * leading `@` and builds the profile URL around what is left, so a pasted URL
+ * would be embedded in that URL and the scrape would quietly find nothing.
+ */
+export async function saveCompetitorSocialHandle(
+  businessId: string,
+  input: { competitorId: string; platform: string; handle: string; followers?: number },
+): Promise<SocialChannel> {
+  const db = requireSupabase();
+  const platform = socialPlatformOf(input.platform) ?? input.platform.trim().toLowerCase();
+  const handle = normaliseSocialHandle(input.handle);
+  if (!platform) throw new Error("Pick a platform.");
+  if (!handle) {
+    throw new Error(
+      "Add the profile's handle or its full profile URL (for example https://www.instagram.com/yourbrand).",
+    );
+  }
+
+  const { data, error } = await db
+    .from("competitor_social")
+    .upsert(
+      {
+        business_id: businessId,
+        competitor_id: input.competitorId,
+        platform,
+        handle,
+        followers: Number.isFinite(input.followers) ? Number(input.followers) : 0,
+      },
+      { onConflict: "business_id,competitor_id,platform" },
+    )
+    .select()
+    .single();
+  if (error || !data) {
+    throw new Error(error?.message ?? "Could not save that handle.");
+  }
+
+  return mapSocialChannel(data as Row);
+}
+
+/** Stops monitoring one competitor handle. */
+export async function deleteCompetitorSocialHandle(
+  businessId: string,
+  input: { competitorId: string; platform: string },
+) {
+  const db = requireSupabase();
+  const platform = socialPlatformOf(input.platform) ?? input.platform.trim().toLowerCase();
+
+  const { error } = await db
+    .from("competitor_social")
+    .delete()
+    .eq("business_id", businessId)
+    .eq("competitor_id", input.competitorId)
+    .eq("platform", platform);
+  if (error) throw new Error(error.message);
+
+  // Drop the scrape state alongside it, so a handle that is added again later
+  // starts fresh instead of inheriting the removed one's "not due yet" cadence
+  // and the run id of a scrape of a different profile.
+  await db
+    .from("social_monitor_targets")
+    .delete()
+    .eq("business_id", businessId)
+    .eq("competitor_id", input.competitorId)
+    .eq("platform", platform);
+}
+
 /* ---------------------------------------------------------------- mapping */
+
+function mapSocialChannel(row: Row): SocialChannel {
+  return {
+    platform: str(row.platform),
+    handle: str(row.handle),
+    followers: num(row.followers),
+    engagementRate: num(row.engagement_rate),
+    postsPerWeek: num(row.posts_per_week),
+    adsRunning: num(row.ads_running),
+  };
+}
 
 function mapProfile(row: Row): BusinessProfile {
   return {

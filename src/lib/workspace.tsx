@@ -19,15 +19,20 @@ import {
   createWorkspaceFromOnboarding,
   deleteBrandLogo,
   deleteClientRow,
+  deleteCompetitorSocialHandle,
   deleteInventoryItem,
   deletePromotionBrief,
+  deleteReviewConnection,
   fetchBusiness,
   loadWorkspace,
   logSentMessages,
   markReviewScanComplete,
   queueScan,
   removeBuyListItem,
+  saveKeywordIdea as saveTrackedKeyword,
   saveMailAccountRow,
+  saveCompetitorSocialHandle,
+  saveReviewConnection,
   setCompetitorCadence,
   setSupplierCadence,
   updateBrandLogo,
@@ -37,6 +42,20 @@ import {
   uploadBrandLogo,
   uploadInventoryImage as uploadInventoryImageFile,
 } from "./repo";
+import {
+  invokeGateway,
+  type AngleDraftResult,
+  type ClusterDraftResult,
+  type CompetitorBenchmarkResult,
+  type PublishAdResult,
+  type ReplyDraftResult,
+  type ReviewSyncResult,
+  type SerpScanResult,
+  type SocialAccountsResult,
+  type SocialScanResult,
+} from "./integrations";
+import { sampleAdAngles, sampleKeywordClusters, sampleKeywordIdeas, sampleReplyDraft } from "../data/business";
+import { sampleSocialAccounts } from "../data/commerce";
 import { setAccessTokenProvider } from "./supabase";
 import { nextSendFrom } from "./schedule";
 import type {
@@ -45,15 +64,45 @@ import type {
   Client,
   DiscountKind,
   InventoryItem,
+  KeywordIdea,
   MailAccount,
   MessageType,
   OnboardingInput,
   PromotionBriefStatus,
   PromotionComponent,
   PromotionTemplate,
+  ReviewConnection,
   SendFrequency,
+  SocialChannel,
+  SocialPublishJob,
   WorkspaceData,
 } from "./types";
+import {
+  mergeSocialChannel,
+  normaliseSocialHandle,
+  socialPlatformKey,
+  socialPlatformOf,
+} from "./social";
+
+/**
+ * A competitor channel added in demo mode: the real handle the user typed, with
+ * none of the measured numbers invented — a scan that never ran has nothing to
+ * report, and sample data would make the page look like it had.
+ */
+function demoSocialChannel(platform: string, handle: string): SocialChannel {
+  const normalised = normaliseSocialHandle(handle);
+  if (!normalised) {
+    throw new Error("Add the competitor's handle or their full profile URL.");
+  }
+  return {
+    platform: socialPlatformOf(platform) ?? platform.trim().toLowerCase(),
+    handle: normalised,
+    followers: 0,
+    engagementRate: 0,
+    postsPerWeek: 0,
+    adsRunning: 0,
+  };
+}
 
 export interface WorkspaceActions {
   setSupplierCadence: (supplierId: string, cadence: Cadence) => Promise<void>;
@@ -74,7 +123,74 @@ export interface WorkspaceActions {
   sendMessages: (clientIds: string[]) => Promise<number>;
   saveMailAccount: (account: MailAccount) => Promise<void>;
   toggleBuyList: (recommendationId: string, on: boolean) => Promise<void>;
-  runReviewScan: () => Promise<void>;
+  /**
+   * Syncs reviews from the connected profiles. Resolves with the gateway's
+   * summary (null in demo mode or when no review reader is configured).
+   */
+  runReviewScan: () => Promise<ReviewSyncResult | null>;
+  /** Connects a review profile by its public handle or URL. */
+  connectReviewProfile: (input: { platform: string; handle: string; label?: string }) => Promise<void>;
+  /** Disconnects a review profile and removes it from the sync list. */
+  removeReviewConnection: (connectionId: string) => Promise<void>;
+  /** Sends a reply to one review through the gateway. */
+  replyToReview: (reviewId: string, reply: string) => Promise<void>;
+  /**
+   * Re-runs the Google search/local scan for the tracked keywords. Resolves with
+   * the gateway's summary (null in demo mode), which reports a budget-capped run.
+   */
+  runSerpScan: () => Promise<SerpScanResult | null>;
+  /**
+   * Benchmarks Share of Voice and the Competitor Review Gap vs tracked rivals.
+   * Resolves with the gateway's summary (null in demo mode).
+   */
+  runCompetitorBenchmark: () => Promise<CompetitorBenchmarkResult | null>;
+  /**
+   * Pulls competitors' recent public posts via the Apify gateway. Resolves with
+   * the gateway's summary (null in demo mode).
+   */
+  runSocialScan: () => Promise<SocialScanResult | null>;
+  /**
+   * Declares a competitor's social handle. The scan scrapes exactly the handles
+   * saved here, so this is what gives it a target — there is no other place a
+   * competitor's profile is registered.
+   */
+  saveCompetitorSocial: (input: {
+    competitorId: string;
+    platform: string;
+    handle: string;
+  }) => Promise<void>;
+  /** Stops monitoring one competitor handle. */
+  removeCompetitorSocial: (input: { competitorId: string; platform: string }) => Promise<void>;
+  /**
+   * Publishes a delivered design to the chosen connected accounts. Resolves with
+   * the gateway's summary (null in demo mode is never returned — demo publishes
+   * against sample accounts).
+   */
+  publishAd: (input: PublishAdInput) => Promise<PublishAdResult | null>;
+  /**
+   * Refreshes the connected social accounts from Mallary. Resolves to whether
+   * any accounts are connected afterwards.
+   */
+  connectSocialAccounts: () => Promise<boolean>;
+  /** Fetches Google Autocomplete ideas for a seed term and stores them. */
+  findKeywordIdeas: (seed: string) => Promise<KeywordIdea[]>;
+  /** Promotes an autocomplete suggestion into the tracked keyword list. */
+  saveKeywordIdea: (idea: KeywordIdea) => Promise<void>;
+  /**
+   * Drafts a reply to one review, for the composer to edit. Nothing is sent:
+   * `sendReviewReply` is still the only way a reply leaves the app.
+   */
+  draftReviewReply: (reviewId: string) => Promise<ReplyDraftResult | null>;
+  /**
+   * Drafts original ad angles from one of a competitor's posts, for the user to
+   * pick from. Creating the brief from a chosen angle is a separate action.
+   */
+  draftAdAngles: (postId: string) => Promise<AngleDraftResult | null>;
+  /**
+   * Groups a seed's suggestions into intent themes. Labels the stored rows, so
+   * the grouping survives a reload rather than living only in the response.
+   */
+  clusterKeywordIdeas: (seed: string) => Promise<ClusterDraftResult | null>;
   uploadLogo: (file: File) => Promise<void>;
   removeLogo: () => Promise<void>;
   /** Creates when `id` is omitted, updates otherwise. */
@@ -88,6 +204,22 @@ export interface WorkspaceActions {
 
 /** Everything the inventory form collects, minus the server-owned fields. */
 export type InventoryItemInput = Omit<InventoryItem, "id" | "createdAt">;
+
+/** What the Post-ad modal submits to the publishing gateway. */
+export interface PublishAdInput {
+  /** The delivered design to post. */
+  deliveredAdId: string | null;
+  briefId: string | null;
+  accountIds: string[];
+  caption: string;
+  /** Absolute ISO timestamp, or null to post now. */
+  scheduledFor: string | null;
+  timezone: string;
+  /** A browser-exported PNG as a data URL, when the design has no hosted file. */
+  mediaBase64?: string;
+  mediaType?: string;
+  mediaFilename?: string;
+}
 
 /** Everything the ad-brief form collects, minus the server-owned fields. */
 export interface PromotionBriefInput {
@@ -296,10 +428,220 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
         }));
       },
       async runReviewScan() {
+        // No provider credentials in demo mode — the sample reviews already stand
+        // in, so a scan just refreshes the timestamp.
         patchData((current) => ({
           ...current,
           latestReviewScan: { ...current.latestReviewScan, scannedAt: new Date().toISOString() },
         }));
+        return null;
+      },
+      async connectReviewProfile(input) {
+        const now = new Date().toISOString();
+        patchData((current) => {
+          const exists = current.reviewConnections.some(
+            (c) => c.platform === input.platform && c.handle === input.handle,
+          );
+          if (exists) return current;
+          const connection: ReviewConnection = {
+            id: `rc-${Date.now()}`,
+            provider: "reviews",
+            platform: input.platform,
+            handle: input.handle,
+            label: (input.label ?? "").trim() || `${input.platform} profile`,
+            status: "active",
+            lastSyncedAt: null,
+            lastError: "",
+            createdAt: now,
+          };
+          return { ...current, reviewConnections: [...current.reviewConnections, connection] };
+        });
+      },
+      async removeReviewConnection(connectionId) {
+        patchData((current) => ({
+          ...current,
+          reviewConnections: current.reviewConnections.filter((c) => c.id !== connectionId),
+        }));
+      },
+      async replyToReview(reviewId, reply) {
+        const now = new Date().toISOString();
+        patchData((current) => ({
+          ...current,
+          latestReviewScan: {
+            ...current.latestReviewScan,
+            items: current.latestReviewScan.items.map((r) =>
+              r.id === reviewId ? { ...r, replied: true, replyText: reply, repliedAt: now } : r,
+            ),
+          },
+        }));
+      },
+      async runSerpScan() {
+        // No provider credentials in demo mode — the sample scan already stands in,
+        // so the panel has something to show without inventing new numbers.
+        return null;
+      },
+      async runCompetitorBenchmark() {
+        // Sample benchmarks already stand in for a live benchmark in demo mode.
+        return null;
+      },
+      async runSocialScan() {
+        // Sample competitor posts already stand in, and no actor credentials exist
+        // in demo mode.
+        return null;
+      },
+      async saveCompetitorSocial(input) {
+        const channel = demoSocialChannel(input.platform, input.handle);
+        patchData((current) => ({
+          ...current,
+          competitors: current.competitors.map((c) =>
+            c.id === input.competitorId
+              ? { ...c, social: mergeSocialChannel(c.social, channel) }
+              : c,
+          ),
+        }));
+      },
+      async removeCompetitorSocial(input) {
+        const platform = socialPlatformKey(input.platform);
+        patchData((current) => ({
+          ...current,
+          competitors: current.competitors.map((c) =>
+            c.id === input.competitorId
+              ? {
+                  ...c,
+                  social: c.social.filter((s) => socialPlatformKey(s.platform) !== platform),
+                }
+              : c,
+          ),
+        }));
+      },
+      async publishAd(input) {
+        const now = new Date().toISOString();
+        const jobId = `job-${Date.now()}`;
+        const scheduled = Boolean(input.scheduledFor);
+        let platforms: string[] = [];
+        patchData((current) => {
+          platforms = [
+            ...new Set(
+              current.socialAccounts
+                .filter((account) => input.accountIds.includes(account.id))
+                .map((account) => account.platform),
+            ),
+          ];
+          const job: SocialPublishJob = {
+            id: jobId,
+            briefId: input.briefId,
+            deliveredAdId: input.deliveredAdId,
+            accountIds: input.accountIds,
+            platforms,
+            caption: input.caption,
+            scheduledFor: input.scheduledFor,
+            timezone: input.timezone,
+            status: scheduled ? "queued" : "published",
+            providerJobId: jobId,
+            permalink: scheduled ? "" : "https://social.example.com/p/demo-ad",
+            error: "",
+            createdAt: now,
+            updatedAt: now,
+          };
+          return { ...current, publishJobs: [job, ...current.publishJobs] };
+        });
+        return {
+          ok: true,
+          jobId,
+          batchId: "demo-batch",
+          status: scheduled ? "queued" : "published",
+          permalink: scheduled ? "" : "https://social.example.com/p/demo-ad",
+          platforms,
+          scheduledFor: input.scheduledFor,
+        };
+      },
+      async connectSocialAccounts() {
+        // No Mallary key in demo mode — seed the sample accounts so the Post-ad
+        // modal has something to post to.
+        patchData((current) =>
+          current.socialAccounts.length
+            ? current
+            : { ...current, socialAccounts: sampleSocialAccounts },
+        );
+        return true;
+      },
+      async findKeywordIdeas(seed) {
+        const ideas = sampleKeywordIdeas(seed);
+        patchData((current) => {
+          const known = new Set(current.keywordIdeas.map((k) => k.suggestion));
+          return {
+            ...current,
+            keywordIdeas: [...ideas.filter((i) => !known.has(i.suggestion)), ...current.keywordIdeas],
+          };
+        });
+        return ideas;
+      },
+      async saveKeywordIdea(idea) {
+        patchData((current) => ({
+          ...current,
+          keywordIdeas: current.keywordIdeas.map((k) =>
+            k.id === idea.id ? { ...k, savedAsKeyword: true } : k,
+          ),
+          topSeoKeywords: current.topSeoKeywords.some((k) => k.keyword === idea.suggestion)
+            ? current.topSeoKeywords
+            : [
+                ...current.topSeoKeywords,
+                { keyword: idea.suggestion, volume: 0, position: null, change: 0 },
+              ],
+        }));
+      },
+      // The three drafting actions answer with sample copy rather than null, so
+      // every drafting surface renders without a provider key. Nothing is spent
+      // and nothing is sent: `model: "demo"` and zero tokens say so plainly.
+      async draftReviewReply(reviewId) {
+        const review = data.latestReviewScan.items.find((item) => item.id === reviewId);
+        return {
+          reviewId,
+          ...sampleReplyDraft({ author: review?.author ?? "", rating: review?.rating ?? 5 }),
+          sent: false,
+          model: "demo",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+      async draftAdAngles(postId) {
+        const post = data.socialPosts.find((candidate) => candidate.id === postId);
+        return {
+          angles: sampleAdAngles(),
+          competitor:
+            data.competitors.find((candidate) => candidate.id === post?.competitorId)?.name ?? "",
+          source: {
+            postId,
+            platform: post?.platform ?? "",
+            caption: post?.caption ?? "",
+            likes: post?.likes ?? 0,
+            comments: post?.comments ?? 0,
+            engagementRate: post?.engagementRate ?? 0,
+          },
+          model: "demo",
+          tokens: 0,
+          costUsd: 0,
+        };
+      },
+      async clusterKeywordIdeas(seed) {
+        const clean = seed.trim().toLowerCase();
+        // Derived from the same helper the demo search uses, rather than from
+        // state: these actions are memoised against `patchData` alone, so `data`
+        // here is the workspace as it was when the provider first rendered — and
+        // the suggestions just added by a search would not be in it.
+        const ideas = sampleKeywordIdeas(clean);
+        const clusters = sampleKeywordClusters(ideas);
+        // Label the rows as the gateway does, so the grouped view survives a
+        // reload instead of existing only in this response.
+        patchData((current) => ({
+          ...current,
+          keywordIdeas: current.keywordIdeas.map((idea) => {
+            if (idea.seed !== clean) return idea;
+            const cluster = clusters.find((entry) => entry.keywords.includes(idea.suggestion));
+            return { ...idea, cluster: cluster?.name ?? "" };
+          }),
+        }));
+        return { seed: clean, clusters, grouped: ideas.length, model: "demo", tokens: 0, costUsd: 0 };
       },
       async uploadLogo(file) {
         const logoUrl = await fileToDataUrl(file);
@@ -450,8 +792,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
       try {
         await run(profile);
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Something went wrong.");
+        // Resync first — the optimistic patch that ran before this write is now
+        // wrong — then record the failure (bootstrap resets the error state) and
+        // rethrow so the caller can report it instead of announcing a save that
+        // never happened.
         await bootstrap();
+        setError(cause instanceof Error ? cause.message : "Something went wrong.");
+        throw cause;
       }
     },
     [profile, bootstrap],
@@ -627,13 +974,278 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           );
         }
       },
+      // When a review reader is configured (SerpApi or Apify), "Scan reviews
+      // now" runs the real sync. Without one we keep the queued-scan behaviour,
+      // so the button still does something honest (it logs a scan and refreshes
+      // the timestamp).
       async runReviewScan() {
-        const now = new Date().toISOString();
+        if (!dbEnabled || !profile) return null;
+        const configured =
+          data?.providerStatus.find((p) => p.provider === "reviews")?.configured === true;
+        if (!configured) {
+          const now = new Date().toISOString();
+          patchData((current) => ({
+            ...current,
+            latestReviewScan: { ...current.latestReviewScan, scannedAt: now },
+          }));
+          await withBusiness((business) => markReviewScanComplete(business.id));
+          return null;
+        }
+        try {
+          const result = await invokeGateway<ReviewSyncResult>("reviews-sync", {
+            businessId: profile.id,
+          });
+          await bootstrap();
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The review sync could not be run.");
+          throw cause;
+        }
+      },
+      async connectReviewProfile(input) {
+        if (!dbEnabled) return;
+        await withBusiness(async (business) => {
+          const created = await saveReviewConnection(business.id, input);
+          patchData((current) => ({
+            ...current,
+            reviewConnections: current.reviewConnections.some((c) => c.id === created.id)
+              ? current.reviewConnections.map((c) => (c.id === created.id ? created : c))
+              : [...current.reviewConnections, created],
+          }));
+        });
+      },
+      async removeReviewConnection(connectionId) {
         patchData((current) => ({
           ...current,
-          latestReviewScan: { ...current.latestReviewScan, scannedAt: now },
+          reviewConnections: current.reviewConnections.filter((c) => c.id !== connectionId),
         }));
-        if (dbEnabled) await withBusiness((business) => markReviewScanComplete(business.id));
+        if (dbEnabled) await withBusiness(() => deleteReviewConnection(connectionId));
+      },
+      async replyToReview(reviewId, reply) {
+        if (!dbEnabled || !profile) return;
+        try {
+          await invokeGateway("review-reply", {
+            businessId: profile.id,
+            reviewId,
+            reply,
+          });
+          await bootstrap();
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "That reply could not be sent.");
+          throw cause;
+        }
+      },
+      // The scan/benchmark calls report failures to the caller as well as the
+      // workspace `error` state: that state is not rendered once data has loaded,
+      // so swallowing the error here would leave the page free to show a success
+      // toast for a scan that never ran.
+      async runSerpScan() {
+        if (!dbEnabled || !profile) return null;
+        try {
+          const result = await invokeGateway<SerpScanResult>("serp-scan", {
+            businessId: profile.id,
+          });
+          await bootstrap();
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The search scan could not be run.");
+          throw cause;
+        }
+      },
+      async runCompetitorBenchmark() {
+        if (!dbEnabled || !profile) return null;
+        try {
+          const result = await invokeGateway<CompetitorBenchmarkResult>("serp-competitors", {
+            businessId: profile.id,
+          });
+          await bootstrap();
+          return result ?? null;
+        } catch (cause) {
+          setError(
+            cause instanceof Error ? cause.message : "The competitor benchmark could not be run.",
+          );
+          throw cause;
+        }
+      },
+      async runSocialScan() {
+        if (!dbEnabled || !profile) return null;
+        try {
+          // A manual scan is explicit intent, so it bypasses the cadence window;
+          // the per-run and monthly spend caps still apply server-side.
+          const result = await invokeGateway<SocialScanResult>("social-scan", {
+            businessId: profile.id,
+            force: true,
+          });
+          await bootstrap();
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The social scan could not be run.");
+          throw cause;
+        }
+      },
+      async saveCompetitorSocial(input) {
+        if (!dbEnabled) return;
+        await withBusiness(async (business) => {
+          const saved = await saveCompetitorSocialHandle(business.id, input);
+          patchData((current) => ({
+            ...current,
+            competitors: current.competitors.map((c) =>
+              c.id === input.competitorId ? { ...c, social: mergeSocialChannel(c.social, saved) } : c,
+            ),
+          }));
+        });
+      },
+      async removeCompetitorSocial(input) {
+        const platform = socialPlatformKey(input.platform);
+        patchData((current) => ({
+          ...current,
+          competitors: current.competitors.map((c) =>
+            c.id === input.competitorId
+              ? {
+                  ...c,
+                  social: c.social.filter((s) => socialPlatformKey(s.platform) !== platform),
+                }
+              : c,
+          ),
+        }));
+        if (dbEnabled) {
+          await withBusiness((business) => deleteCompetitorSocialHandle(business.id, input));
+        }
+      },
+      async publishAd(input) {
+        if (!dbEnabled || !profile) return null;
+        try {
+          const result = await invokeGateway<PublishAdResult>("publish-ad", {
+            businessId: profile.id,
+            deliveredAdId: input.deliveredAdId ?? undefined,
+            briefId: input.briefId ?? undefined,
+            accountIds: input.accountIds,
+            caption: input.caption,
+            scheduledFor: input.scheduledFor ?? undefined,
+            timezone: input.timezone,
+            mediaBase64: input.mediaBase64,
+            mediaType: input.mediaType,
+            mediaFilename: input.mediaFilename,
+          });
+          await bootstrap();
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The ad could not be published.");
+          throw cause;
+        }
+      },
+      async connectSocialAccounts() {
+        if (!dbEnabled || !profile) return false;
+        try {
+          const result = await invokeGateway<SocialAccountsResult>("social-accounts", {
+            businessId: profile.id,
+          });
+          await bootstrap();
+          return (result?.accounts ?? 0) > 0;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not load your social accounts.");
+          throw cause;
+        }
+      },
+      async findKeywordIdeas(seed) {
+        if (!dbEnabled || !profile) return sampleKeywordIdeas(seed);
+        const result = await invokeGateway<{ ideas: KeywordIdea[] }>("keyword-ideas", {
+          businessId: profile.id,
+          seed,
+          // Also probe the intent-word prefixes, so the list is not just variants
+          // of the seed term.
+          expand: true,
+        });
+        const ideas = result?.ideas ?? [];
+        patchData((current) => {
+          const known = new Set(current.keywordIdeas.map((k) => k.suggestion));
+          return {
+            ...current,
+            keywordIdeas: [...ideas.filter((i) => !known.has(i.suggestion)), ...current.keywordIdeas],
+          };
+        });
+        return ideas;
+      },
+      async saveKeywordIdea(idea) {
+        // Optimistic, so the row flips to "Tracked" straight away; rolled back
+        // below if the write fails so the UI never claims a keyword we did not
+        // actually save.
+        const markTracked = (on: boolean) =>
+          patchData((current) => ({
+            ...current,
+            keywordIdeas: current.keywordIdeas.map((k) =>
+              k.id === idea.id ? { ...k, savedAsKeyword: on } : k,
+            ),
+          }));
+        markTracked(true);
+        if (!dbEnabled || !profile) return;
+        try {
+          await saveTrackedKeyword(profile.id, { id: idea.id, suggestion: idea.suggestion });
+          await bootstrap();
+        } catch (cause) {
+          markTracked(false);
+          setError(cause instanceof Error ? cause.message : "That keyword could not be saved.");
+          throw cause;
+        }
+      },
+      // AI drafting. Every one of these returns a draft for the user to work on:
+      // none of them sends a reply, publishes a post or creates a brief. Without
+      // a configured model the gateway refuses with a 409 naming the key to add,
+      // which the caller surfaces as-is.
+      async draftReviewReply(reviewId) {
+        if (!dbEnabled || !profile) return null;
+        try {
+          return await invokeGateway<ReplyDraftResult>("ai-draft", {
+            businessId: profile.id,
+            task: "reply",
+            reviewId,
+          });
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "A reply draft could not be written.");
+          throw cause;
+        }
+      },
+      async draftAdAngles(postId) {
+        if (!dbEnabled || !profile) return null;
+        try {
+          return await invokeGateway<AngleDraftResult>("ai-draft", {
+            businessId: profile.id,
+            task: "angles",
+            postId,
+          });
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Angles could not be drafted.");
+          throw cause;
+        }
+      },
+      async clusterKeywordIdeas(seed) {
+        if (!dbEnabled || !profile) return null;
+        const wanted = seed.trim();
+        try {
+          const result = await invokeGateway<ClusterDraftResult>("ai-draft", {
+            businessId: profile.id,
+            task: "clusters",
+            seed: wanted,
+          });
+          // The labels are already written server-side; mirror them here so the
+          // grouped list is correct without refetching the workspace.
+          patchData((current) => ({
+            ...current,
+            keywordIdeas: current.keywordIdeas.map((idea) => {
+              if (idea.seed !== wanted) return idea;
+              const cluster = result.clusters.find((entry) =>
+                entry.keywords.some(
+                  (keyword) => keyword.toLowerCase() === idea.suggestion.toLowerCase(),
+                ),
+              );
+              return { ...idea, cluster: cluster?.name ?? "" };
+            }),
+          }));
+          return result;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Those keywords could not be grouped.");
+          throw cause;
+        }
       },
       async uploadLogo(file) {
         if (!dbEnabled) {
@@ -750,7 +1362,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         if (dbEnabled) await withBusiness(() => deletePromotionBrief(briefId));
       },
     }),
-    [data, patchData, withBusiness, userId],
+    [data, patchData, withBusiness, userId, profile, bootstrap],
   );
 
   const value = useMemo<WorkspaceContextValue>(

@@ -24,7 +24,7 @@ import {
   inputClass,
 } from "../components/primitives";
 import { Modal } from "../components/Modal";
-import { useToast } from "../components/Toast";
+import { useActionToast, useToast } from "../components/Toast";
 import { money } from "../lib/format";
 import { useWorkspace, useWorkspaceData, type InventoryItemInput } from "../lib/workspace";
 import type { InventoryItem } from "../lib/types";
@@ -49,6 +49,7 @@ const STATUS_TONE = { active: "good", draft: "warn", archived: "neutral" } as co
 
 export function InventoryPage() {
   const toast = useToast();
+  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
   const items = workspace.inventory;
@@ -131,22 +132,30 @@ export function InventoryPage() {
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    void actions.saveInventoryItem({
-      ...form,
-      name: form.name.trim(),
-      sku: form.sku.trim(),
-      category: form.category.trim(),
-      description: form.description.trim(),
-      tags,
-      stock: form.kind === "service" ? 0 : form.stock,
-    });
-    toast(form.id ? `${form.name.trim()} updated.` : `${form.name.trim()} added to your catalogue.`);
+    void actionToast(
+      () =>
+        actions.saveInventoryItem({
+          ...form,
+          name: form.name.trim(),
+          sku: form.sku.trim(),
+          category: form.category.trim(),
+          description: form.description.trim(),
+          tags,
+          stock: form.kind === "service" ? 0 : form.stock,
+        }),
+      {
+        success: form.id ? `${form.name.trim()} updated.` : `${form.name.trim()} added to your catalogue.`,
+        failure: "That item could not be saved.",
+      },
+    );
     setFormOpen(false);
   }
 
   function remove(item: InventoryItem) {
-    void actions.removeInventoryItem(item.id);
-    toast(`${item.name} removed from your catalogue.`);
+    void actionToast(() => actions.removeInventoryItem(item.id), {
+      success: `${item.name} removed from your catalogue.`,
+      failure: `${item.name} could not be removed.`,
+    });
   }
 
   return (

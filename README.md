@@ -25,7 +25,7 @@ Other commands:
 
 ```bash
 npm run build      # typecheck + production build into dist/
-npm run test       # vitest: page, data and onboarding tests
+npm run test       # vitest: page, data, onboarding and gateway-normaliser tests
 npm run typecheck
 ```
 
@@ -62,7 +62,8 @@ VITE_APP_URL=http://localhost:5173
 ```
 
 Only `VITE_`-prefixed values reach the browser. The service role key and Clerk secret must stay
-server-side (scheduled scan jobs / edge functions).
+server-side (scheduled scan jobs / edge functions). The four monitoring providers add their own
+server-only keys — see §8 and the banner in `env.example`.
 
 ---
 
@@ -121,7 +122,7 @@ scan. Until that scan lands, the pages say a baseline is pending rather than sho
 ## 6. The workspace pages
 
 Navigation is a hash route you can bookmark: `#/suppliers`, `#/competition`, `#/clients`,
-`#/business`, `#/inventory` and `#/promotion`.
+`#/business`, `#/social`, `#/inventory`, `#/promotion` and `#/notifications`.
 
 **Suppliers** — latest inventory from each supplier site and what changed (new product, price move,
 stock move, promotion), buy price before/after, stock transitions, MOQ, lead time, a suggested action
@@ -129,9 +130,18 @@ per row, filters by change type and 48h/7d/30d, per-supplier cadence, "Scan now"
 `scan_runs` job), and CSV export.
 
 **Competition** — per competitor: new inventory listed, traffic trend and sources vs yours, the
-keyword/SEO gap ranked by opportunity, social presence and live ad counts, ad platforms, target
+keyword/SEO gap ranked by opportunity, social presence (**add a competitor's Instagram, TikTok,
+Facebook or X handle here** — those handles are the scan's target list) and live ad counts, ad platforms, target
 audiences by segment and age band, their ads with banner links (reference only) plus "build our own"
-original briefs, reviews their customers leave with the 2-month rating trend, and scan cadence.
+original briefs, reviews their customers leave with the 2-month rating trend, and scan cadence. Two
+sub-tabs hold the measured detail: **Local** (your Google positions per device, the map 3-pack, your
+Google Business profile health, share of voice and the rating/review-count gap against each
+competitor) and **Social** (their recent public posts, the one to beat, and measured posting cadence).
+
+**Social & reviews** — your reputation and channels in one place: the latest review scan per source
+with a **reply composer** (every suggested reply is a draft you edit and send yourself), the review
+profiles being monitored and a control to connect another by its public handle or URL, your social
+scores with focus priorities, and the competitor benchmark set behind them.
 
 **Clients** — your mail account (login email, reply-to, signature, digest), a form to add current
 active customers, the customer list with inline status/frequency, a per-customer message schedule
@@ -149,10 +159,12 @@ each with its own image.
 **Promotions** — this page is a design brief, not a design tool. You pick the components your ad
 should include (product, price, discount, deal, coupon, logo, contact, rating), fill in their values
 — a discount can be a percentage or a money amount — plus the headline, format, accent colour and any
-notes. Sending the brief writes it to Supabase for the design team. The **Ad frame** shows an "in
-design" placeholder until we finish, then the delivered design we pushed to the `delivered-ads`
-bucket appears there to export. **Ads history** is a single timeline of every brief sent and every
-design delivered.
+notes. Sending the brief writes it to Supabase for the design team. The **Ad frame** shows an "in design" placeholder until we finish, then the delivered design we pushed to the `delivered-ads`
+bucket appears there to export. From the Ad frame (or a delivered row) the **`Post ad`** button opens
+a post modal: pick the social accounts you connected, edit the caption the brief seeded, then post now
+or schedule it in a timezone you choose. **Ads history** is a single timeline of every brief sent,
+every design delivered and every post published, each with its platform badges and a link to the live
+post.
 
 ---
 
@@ -167,6 +179,11 @@ design delivered.
 | My business | `my_keywords`, `my_metrics`, `my_review_sources`, `my_review_series`, `my_reviews`, `social_scores`, `inventory_recommendations`, `buy_list_items`, `weekly_reports` |
 | Catalogue | `inventory_items` (products & services, images in the `inventory-images` bucket) |
 | Promotions | `promotion_briefs` (what the business asks for), `delivered_ads` (finished designs in the `delivered-ads` bucket) |
+| Search & local | `serp_rankings`, `local_pack_rankings`, `local_profile_health`, `keyword_ideas` |
+| Social monitoring | `competitor_social` (one monitored handle per competitor per platform — the scan's target list), `social_posts`, `social_monitor_targets` (how each handle was last scraped), `competitor_share_of_voice`, `competitor_review_gap` |
+| Reputation | `review_connections` (profiles tracked by public handle), `review_replies` (sent/failed audit) |
+| Publishing | `social_accounts` (mirrored from Mallary), `social_publish_jobs` (one row per push) |
+| Integrations | `integration_connections`, `api_usage_log`, `integration_idempotency`, `webhook_events` (replay protection) |
 | Operations | `scan_runs` (every scan queue, manual or scheduled) |
 
 Key files:
@@ -175,24 +192,74 @@ Key files:
 supabase/migrations/0001_init.sql   schema, RLS, storage bucket
 supabase/migrations/0005_inventory_and_promotions.sql  catalogue + superseded promotion designs
 supabase/migrations/0006_promotion_briefs_and_delivered_ads.sql  ad briefs + delivered designs
+supabase/migrations/0008_integration_foundation.sql  connections, usage log, idempotency
+supabase/migrations/0009–0014_*.sql  search/local, benchmarks, social, reviews, publishing, webhooks
+supabase/functions/                 the provider gateway (see §8)
 src/lib/supabase.ts                 Supabase client using Clerk session tokens
 src/lib/repo.ts                     all reads/writes + row mapping
 src/lib/workspace.tsx               data provider (live Supabase or sample mode)
+src/lib/integrations.ts             provider catalogue, usage/health readouts, gateway calls
 src/pages/OnboardingPage.tsx        the six-step wizard
 src/pages/LoginPage.tsx             Clerk sign-in / sign-up
 src/lib/types.ts                    shared domain types
 ```
 
-## 8. Not built yet
+---
 
-- The scheduled scanner that actually fetches supplier/competitor pages and writes rows. "Scan now"
-  queues a `scan_runs` row and updates the last-scan time; the worker is the next piece.
+## 8. Third-party integrations — the provider gateway
+
+Five providers are wired in behind one gateway. **No provider key ever reaches the browser:** the app
+calls a Supabase Edge Function, which holds the key, makes the provider call server-side and writes
+the result to a tenant-scoped table.
+
+| Provider | What it powers | Gateway functions |
+| --- | --- | --- |
+| **SerpApi** | Google organic positions per device, the local map 3-pack, Google Business profile health, competitor keyword/Share-of-Voice benchmarks, autocomplete keyword ideas | `serp-scan`, `serp-competitors`, `keyword-ideas` |
+| **Apify** | Competitors' recent public social posts, their engagement and posting cadence | `social-scan` |
+| **Reviews** | Reviews from six platforms, read through the SerpApi and Apify accounts above. Not a vendor of its own — see §3.3 of the blueprint | `reviews-sync`, `review-reply` |
+| **AI drafting** | Reply drafts for your reviews, original ad angles from a competitor's best post, and intent themes for keyword suggestions. **Every draft is a draft** — nothing is sent, posted or created without you | `ai-draft` |
+| **Mallary.ai** | Publishing a finished ad design to your connected social accounts | `publish-ad`, `social-accounts` |
+| — | Which providers the server is configured for, and the caps it enforces | `integrations-status` |
+| — | Inbound webhooks from both providers (signature-verified, replay-protected) | `provider-webhook` |
+
+Shared plumbing lives in `supabase/functions/_shared/`: auth (Clerk JWT → tenant), HTTP client, budget
+caps, idempotency, usage logging, CORS and webhook verification. Setup and the deploy commands are in
+[`supabase/functions/README.md`](supabase/functions/README.md); the full plan, per-phase status and the
+provider contract notes are in [`docs/API_INTEGRATION_BLUEPRINT.md`](docs/API_INTEGRATION_BLUEPRINT.md).
+
+**Cost control.** Every call is logged to `api_usage_log` with its billable units and dollars.
+`_shared/budget.ts` reads that log back and enforces a per-workspace monthly allowance per provider —
+unit caps for SerpApi and Mallary, a dollar cap for Apify. Review reads are billed to whichever of
+those two readers served them, so they are bounded by the same caps. AI drafting is deliberately
+**uncapped** — it is user-triggered and costs a fraction of a cent — so it is logged and shown but
+never refused; set `LLM_MONTHLY_CHARGE_USD` to put a ceiling on it. A run trims itself to what
+fits and refuses with a clear message once the allowance is gone. Business settings shows a **Plan
+usage** panel (the same numbers the caps enforce) and a **Monitoring health** panel (recent failed
+scans and any connection a provider has rejected), and the Notifications page raises an alert at 80%
+and again at 100%.
+
+---
+
+## 9. Not built yet
+
+- The scheduled worker that fetches supplier/competitor **pages** (non-API sources) and writes rows.
+  "Scan now" queues a `scan_runs` row and updates the last-scan time, and the provider gateway covers
+  everything that has an API; this worker is the next piece.
 - Real email delivery for the client schedule (sends are logged to `sent_messages` today).
 - Product photo shoots / ad exports uploaded to the `ad-assets` bucket (paths and signed URLs are
   already wired).
 - Code splitting: the Clerk + Supabase bundle is one chunk today.
 
-## 9. Product guardrail
+---
+
+## 10. Product guardrail
 
 Competitor advertising is treated as a **market signal**, never artwork to copy. Banner links are
 shown for reference only, and every "build our own" action produces an original brief for your brand.
+The same rule runs through publishing: the gateway will only ever post creative the tenant owns.
+
+AI output follows the same rule. Reply drafts go into the composer for you to edit and send; angles
+are options you pick from and they create a brief, never a published ad; keyword themes only label
+suggestions you already had. A cluster may never contain a keyword the model invented — those are
+dropped before the page sees them — and the drafting model is never handed text typed into the
+browser: it works from rows we already hold for your tenant.

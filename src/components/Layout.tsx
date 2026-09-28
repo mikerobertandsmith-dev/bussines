@@ -11,6 +11,7 @@ import {
   LogOut,
   Megaphone,
   Menu,
+  RefreshCw,
   Share2,
   Truck,
   X,
@@ -18,11 +19,12 @@ import {
 import type { RouteId } from "../lib/hooks";
 import { buildAlerts } from "../lib/alerts";
 import { authEnabled, dbEnabled, demoMode } from "../lib/env";
+import { PROVIDER_CATALOG, buildUsageBars, buildWorkspaceHealth } from "../lib/integrations";
 import { useWorkspace } from "../lib/workspace";
-import { daysAgo } from "../lib/format";
+import { daysAgo, relativeTime, titleCase } from "../lib/format";
 import { LogoUpload } from "./LogoUpload";
 import { Modal } from "./Modal";
-import { Badge, Logo, btnPrimary } from "./primitives";
+import { Badge, Logo, Meter, btnGhost, btnPrimary } from "./primitives";
 
 type NavItem = { id: RouteId; label: string; hint: string; icon: ReactNode };
 
@@ -155,9 +157,23 @@ export function Layout({
   const [navOpen, setNavOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const { data, actions } = useWorkspace();
+  const { data, actions, refresh } = useWorkspace();
 
   const alerts = useMemo(() => (data ? buildAlerts(data) : []), [data]);
+
+  // Plan usage and monitoring health both come from rows the app already holds,
+  // so the settings modal can report them without calling any provider.
+  const usage = useMemo(() => buildUsageBars(data?.providerStatus ?? []), [data?.providerStatus]);
+  const health = useMemo(
+    () =>
+      buildWorkspaceHealth({
+        scanRuns: data?.scanRuns ?? [],
+        integrationConnections: data?.integrationConnections ?? [],
+        reviewConnections: data?.reviewConnections ?? [],
+        socialAccounts: data?.socialAccounts ?? [],
+      }),
+    [data?.scanRuns, data?.integrationConnections, data?.reviewConnections, data?.socialAccounts],
+  );
 
   const badges: Record<RouteId, number> = {
     suppliers: data
@@ -408,6 +424,136 @@ export function Layout({
               </div>
             ))}
           </dl>
+
+          <div className="border-t border-slate-100 pt-4">
+            <p className="mb-3 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+              Integrations
+            </p>
+            <ul className="space-y-2">
+              {(data?.providerStatus ?? []).map((provider) => (
+                <li
+                  key={provider.provider}
+                  className="rounded-lg border border-slate-200 px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-slate-800">{provider.label}</span>
+                    <Badge tone={provider.configured ? "good" : "neutral"}>
+                      {provider.configured ? "Configured" : "Not configured"}
+                    </Badge>
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-slate-500">{provider.description}</p>
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {provider.configured
+                      ? `${provider.connections} connection${provider.connections === 1 ? "" : "s"} · ${provider.requests} call${provider.requests === 1 ? "" : "s"} · $${provider.costUsd.toFixed(2)} recorded`
+                      : `Add ${provider.envKeys.join(" + ")} to the server, then deploy the gateway functions.`}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {usage.length ? (
+            <div className="border-t border-slate-100 pt-4">
+              <p className="mb-3 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                Plan usage this month
+              </p>
+              <ul className="space-y-2.5">
+                {usage.map((bar) => (
+                  <li key={bar.provider} className="rounded-lg border border-slate-200 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-800">{bar.label}</span>
+                      <Badge
+                        tone={bar.level === "full" ? "bad" : bar.level === "warn" ? "warn" : "good"}
+                      >
+                        {bar.capped ? `${Math.round(bar.pct)}% used` : "No cap"}
+                      </Badge>
+                    </div>
+                    {bar.capped ? (
+                      <Meter
+                        value={Math.min(100, bar.pct)}
+                        tone={bar.level === "full" ? "bad" : bar.level === "warn" ? "warn" : "brand"}
+                        className="mt-2"
+                      />
+                    ) : null}
+                    <p className="mt-1.5 text-[10px] text-slate-400">
+                      {bar.cap > 0
+                        ? `${bar.units} of ${bar.cap} monthly units`
+                        : bar.capUsd > 0
+                          ? `$${bar.costUsd.toFixed(2)} of $${bar.capUsd.toFixed(2)} monthly spend`
+                          : `${bar.units} units recorded`}
+                      {` · ${bar.requests} call${bar.requests === 1 ? "" : "s"}`}
+                      {bar.errors ? ` · ${bar.errors} failed` : ""}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[10px] text-slate-400">
+                Counted from the gateway's own call log. A provider at 100% refuses the next scan
+                until its cap is raised or the month rolls over.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="border-t border-slate-100 pt-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                Monitoring health
+              </p>
+              <button
+                type="button"
+                className={btnGhost}
+                onClick={() => void refresh()}
+              >
+                <RefreshCw size={13} /> Refresh
+              </button>
+            </div>
+
+            {health.ok ? (
+              <p className="rounded-lg bg-emerald-50 px-3 py-2 text-[11px] text-emerald-800">
+                Nothing needs attention — no scans failed in the last 7 days and every connection is
+                still authorised.
+                {health.pendingScans ? ` ${health.pendingScans} scan${health.pendingScans === 1 ? "" : "s"} still running.` : ""}
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {health.failedScans.slice(0, 5).map((run) => (
+                  <li key={run.id} className="rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs font-semibold text-rose-900">
+                        {run.sourceName || titleCase(run.sourceType)} scan failed
+                      </span>
+                      <span className="shrink-0 text-[10px] text-rose-700">
+                        {relativeTime(run.startedAt)}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-rose-800">
+                      {run.error || "The provider did not return a result. Re-run the scan."}
+                    </p>
+                  </li>
+                ))}
+                {health.failedScans.length > 5 ? (
+                  <li className="text-[10px] text-slate-400">
+                    +{health.failedScans.length - 5} more failed scans this week
+                  </li>
+                ) : null}
+
+                {health.needsReconnect.map((item) => (
+                  <li
+                    key={`${item.provider}-${item.label}`}
+                    className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2"
+                  >
+                    <p className="text-xs font-semibold text-amber-900">
+                      {item.label} needs reconnecting
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-amber-800">
+                      {PROVIDER_CATALOG[item.provider].label} rejected the saved credentials. Remove
+                      and re-add the connection on the page that owns it.
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           <p className="text-[11px] text-slate-500">
             Other business details come from your setup answers. Re-run setup from the workspace to

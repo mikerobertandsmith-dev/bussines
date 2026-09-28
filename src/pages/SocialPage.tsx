@@ -1,9 +1,13 @@
 import { useState } from "react";
 import {
   Binoculars,
+  Link2,
   MessageSquareQuote,
+  Plus,
   RefreshCw,
+  Send,
   Share2,
+  Sparkles,
   Store,
   ThumbsDown,
   ThumbsUp,
@@ -13,19 +17,31 @@ import {
   Card,
   CardHead,
   EmptyState,
+  Field,
   Stat,
   Tabs,
   Td,
   Th,
+  btnGhost,
   btnPrimary,
+  inputClass,
 } from "../components/primitives";
+import { Modal } from "../components/Modal";
 import { AreaChart, DeltaPill, Stars } from "../components/charts";
-import { useToast } from "../components/Toast";
+import { useActionToast, useToast } from "../components/Toast";
+import { platformLabel, summariseSocial } from "../lib/social";
 import { compact, relativeTime, shortDate } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
-import type { Competitor } from "../lib/types";
+import type { Competitor, MyReview } from "../lib/types";
 
 type SocialTab = "reviews" | "competitors" | "social";
+
+/**
+ * Platforms the connect form offers, in the order it lists them. Google and
+ * TripAdvisor are read through SerpApi; the rest need an Apify actor id for that
+ * platform, and a sync says so rather than failing silently.
+ */
+const REVIEW_PLATFORMS = ["google", "yelp", "g2", "trustpilot", "capterra", "tripadvisor"] as const;
 
 /** Percent change that survives a missing previous value. */
 function deltaPct(current: number, previous: number): number {
@@ -42,20 +58,124 @@ function sentimentCounts(competitor: Competitor) {
 }
 
 export function SocialPage() {
-  const toast = useToast();
+  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
 
-  const { reviewSources, latestReviewScan, socialScores, competitors, profile } = workspace;
+  const { reviewSources, reviewConnections, latestReviewScan, socialScores, competitors, profile } =
+    workspace;
+  const socialPosts = workspace.socialPosts;
   const [tab, setTab] = useState<SocialTab>("reviews");
+  const [replyTarget, setReplyTarget] = useState<MyReview | null>(null);
+  const [replyText, setReplyText] = useState("");
+  /** Set once a draft has been written, so the composer can say what it was. */
+  const [draftTone, setDraftTone] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connectPlatform, setConnectPlatform] = useState<string>("google");
+  const [connectHandle, setConnectHandle] = useState("");
+  const toast = useToast();
+
+  // Measured from the posts we actually scraped, so the declared numbers on the
+  // channel rows can be checked against behaviour.
+  const socialInsights = new Map(
+    competitors.map((c) => [c.id, summariseSocial(socialPosts, c.id)]),
+  );
 
   const lastScan = latestReviewScan.scannedAt;
   const decliningSource = reviewSources.find((s) => s.score < s.previousScore);
   const totalReviews = reviewSources.reduce((sum, s) => sum + s.reviews, 0);
 
   function runReviewScan() {
-    void actions.runReviewScan();
-    toast("Review scan queued — new reviews and replies appear as soon as it finishes.");
+    void actionToast(
+      async () => {
+        const result = await actions.runReviewScan();
+        if (result) {
+          toast(
+            `Synced ${result.profiles} profile${result.profiles === 1 ? "" : "s"} — ${result.reviews} review${result.reviews === 1 ? "" : "s"}${result.flagged ? `, ${result.flagged} need a reply` : ""}.${result.running ? ` ${result.running} still running — the next sync collects it.` : ""}`,
+          );
+        }
+      },
+      {
+        success: "Review scan queued — new reviews and replies appear as soon as it finishes.",
+        failure: "The review scan could not be queued.",
+      },
+    );
+  }
+
+  /** Opens the reply composer, seeded with the suggested action text. */
+  function openReply(review: MyReview) {
+    setReplyTarget(review);
+    setReplyText(review.action || "");
+    setDraftTone("");
+  }
+
+  /**
+   * Asks the model for a reply and puts it in the box. The reply still has to be
+   * sent by hand — drafting never sends anything, which is the whole guardrail.
+   */
+  async function draftReply() {
+    if (!replyTarget) return;
+    setDrafting(true);
+    try {
+      const draft = await actions.draftReviewReply(replyTarget.id);
+      if (!draft) {
+        toast("AI drafting is not configured — add GROQ_API_KEY to the function secrets.");
+        return;
+      }
+      setReplyText(draft.reply);
+      setDraftTone(draft.tone);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "A draft could not be written.");
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  async function sendReply() {
+    if (!replyTarget) return;
+    const target = replyTarget;
+    const body = replyText.trim();
+    if (!body) {
+      toast("Write a reply before sending it.");
+      return;
+    }
+    try {
+      await actions.replyToReview(target.id, body);
+      toast(`Reply sent to ${target.author}.`);
+      setReplyTarget(null);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "The reply could not be sent.");
+    }
+  }
+
+  async function removeProfile(connectionId: string) {
+    try {
+      await actions.removeReviewConnection(connectionId);
+      toast("Review profile disconnected.");
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "That profile could not be removed.");
+    }
+  }
+
+  async function connectProfile() {
+    const handle = connectHandle.trim();
+    if (!handle) {
+      toast("Add the profile's public URL or handle.");
+      return;
+    }
+    try {
+      await actions.connectReviewProfile({
+        platform: connectPlatform,
+        handle,
+        label: platformLabel(connectPlatform),
+      });
+      toast(`${platformLabel(connectPlatform)} profile connected.`);
+      setConnectOpen(false);
+      setConnectHandle("");
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "That profile could not be connected.");
+    }
   }
 
   return (
@@ -197,16 +317,86 @@ export function SocialPage() {
                       <Stars rating={r.rating} />
                     </div>
                     <p className="mt-1 text-[11px] text-slate-600">{r.text}</p>
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      {r.source} · {relativeTime(r.postedAt)}
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-slate-400">
+                      <span>
+                        {r.source} · {relativeTime(r.postedAt)}
+                      </span>
+                      {r.language && r.language !== "en" ? (
+                        <Badge tone="neutral">{r.language.toUpperCase()}</Badge>
+                      ) : null}
+                      {r.replied ? (
+                        <Badge tone="good">Replied</Badge>
+                      ) : r.sentiment === "negative" ? (
+                        <Badge tone="bad">Needs reply</Badge>
+                      ) : null}
                     </p>
-                    <p className="mt-1.5 rounded bg-indigo-50 px-2 py-1 text-[11px] text-indigo-700">
-                      {r.action}
-                    </p>
+                    {r.replied ? (
+                      <p className="mt-1.5 rounded bg-emerald-50 px-2 py-1 text-[11px] text-emerald-800">
+                        {r.replyText || "Reply sent."}
+                      </p>
+                    ) : (
+                      <p className="mt-1.5 rounded bg-indigo-50 px-2 py-1 text-[11px] text-indigo-700">
+                        {r.action}
+                      </p>
+                    )}
+                    {r.replied ? null : (
+                      <div className="mt-2 flex justify-end">
+                        <button type="button" className={btnGhost} onClick={() => openReply(r)}>
+                          <Send size={12} /> Reply
+                        </button>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
+
+            <div className="border-t border-slate-100 px-4 py-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
+                  Review profiles
+                </p>
+                <button type="button" className={btnGhost} onClick={() => setConnectOpen(true)}>
+                  <Plus size={13} /> Connect
+                </button>
+              </div>
+              {reviewConnections.length === 0 ? (
+                <p className="text-[11px] text-slate-500">
+                  No review pages connected yet. Add one to sync its reviews and reply from here.
+                </p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {reviewConnections.map((c) => (
+                    <li
+                      key={c.id}
+                      className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-2.5 py-1.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[11px] font-medium text-slate-800">
+                          {c.label || c.handle}
+                        </p>
+                        <p className="truncate text-[10px] text-slate-400">
+                          {c.handle}
+                          {c.lastSyncedAt
+                            ? ` · synced ${relativeTime(c.lastSyncedAt)}`
+                            : " · not synced yet"}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {c.status === "needs_reauth" ? <Badge tone="warn">Reconnect</Badge> : null}
+                        <button
+                          type="button"
+                          onClick={() => void removeProfile(c.id)}
+                          className="text-[10px] text-slate-400 transition hover:text-rose-600"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </Card>
         </div>
       ) : null}
@@ -415,7 +605,7 @@ export function SocialPage() {
             <CardHead
               icon={<Store size={16} />}
               title="Competitor social channels"
-              subtitle="Where they post, their following and how often they run ads"
+              subtitle="Where they post, their following, and what their scraped posts measure"
             />
             {competitors.length === 0 ? (
               <EmptyState
@@ -432,6 +622,22 @@ export function SocialPage() {
                         {c.social.length} channel{c.social.length === 1 ? "" : "s"}
                       </Badge>
                     </div>
+                    {(() => {
+                      const insight = socialInsights.get(c.id);
+                      if (!insight || insight.posts === 0) return null;
+                      return (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          Measured from {insight.posts} scraped post{insight.posts === 1 ? "" : "s"}: ~
+                          {insight.postsPerWeek}/week · {insight.averageEngagement}% average engagement
+                          {insight.postsLast24Hours > 0
+                            ? ` · ${insight.postsLast24Hours} in the last 24h`
+                            : ""}
+                          {insight.topHashtags.length
+                            ? ` · leans on #${insight.topHashtags.slice(0, 2).map((t) => t.tag).join(" #")}`
+                            : ""}
+                        </p>
+                      );
+                    })()}
                     {c.social.length === 0 ? (
                       <p className="mt-1 text-[11px] text-slate-500">No social data captured yet.</p>
                     ) : (
@@ -463,6 +669,106 @@ export function SocialPage() {
           </Card>
         </div>
       ) : null}
+
+      {/* ------------------------------------------------ reply composer */}
+      <Modal
+        open={Boolean(replyTarget)}
+        onClose={() => setReplyTarget(null)}
+        title="Reply to this review"
+        subtitle={
+          replyTarget
+            ? `${replyTarget.author} · ${replyTarget.rating}★ on ${replyTarget.source}`
+            : undefined
+        }
+        icon={<Send size={16} />}
+        footer={
+          <>
+            <button
+              type="button"
+              className={btnGhost}
+              disabled={drafting}
+              onClick={() => void draftReply()}
+            >
+              <Sparkles size={13} /> {drafting ? "Drafting…" : "Draft with AI"}
+            </button>
+            <button type="button" className={btnGhost} onClick={() => setReplyTarget(null)}>
+              Cancel
+            </button>
+            <button type="button" className={btnPrimary} onClick={() => void sendReply()}>
+              <Send size={13} /> Send reply
+            </button>
+          </>
+        }
+      >
+        {replyTarget ? (
+          <div className="space-y-4 px-4 py-4">
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+              “{replyTarget.text}”
+            </p>
+            <Field
+              label="Your reply"
+              hint="Edit the suggestion before it goes out — nothing is posted automatically."
+            >
+              <textarea
+                className={`${inputClass} min-h-28`}
+                value={replyText}
+                onChange={(event) => setReplyText(event.target.value)}
+              />
+            </Field>
+            {draftTone ? (
+              <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <Sparkles size={12} /> Drafted with a {draftTone} tone. Sending is still yours to do.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
+
+      {/* ------------------------------------------------ connect a profile */}
+      <Modal
+        open={connectOpen}
+        onClose={() => setConnectOpen(false)}
+        title="Connect a review profile"
+        subtitle="Any public review page — no login on that platform is required"
+        icon={<Link2 size={16} />}
+        footer={
+          <>
+            <button type="button" className={btnGhost} onClick={() => setConnectOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className={btnPrimary} onClick={() => void connectProfile()}>
+              Connect profile
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Platform">
+            <select
+              className={inputClass}
+              value={connectPlatform}
+              onChange={(event) => setConnectPlatform(event.target.value)}
+            >
+              {REVIEW_PLATFORMS.map((platform) => (
+                <option key={platform} value={platform}>
+                  {platformLabel(platform)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Public URL or handle"
+            hint="e.g. yourretailbrand.com, or the full Trustpilot profile URL"
+          >
+            <input
+              className={inputClass}
+              placeholder="e.g. yourretailbrand.com"
+              value={connectHandle}
+              onChange={(event) => setConnectHandle(event.target.value)}
+            />
+          </Field>
+        </div>
+      </Modal>
     </div>
   );
 }

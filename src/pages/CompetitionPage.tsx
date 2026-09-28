@@ -5,14 +5,18 @@ import {
   ExternalLink,
   Globe2,
   Image as ImageIcon,
+  MapPin,
   Megaphone,
   MessageSquareQuote,
   Package,
+  Plus,
   RefreshCw,
   Search,
   Share2,
   Sparkles,
   Target,
+  Trash2,
+  Trophy,
   Users,
 } from "lucide-react";
 import {
@@ -20,6 +24,9 @@ import {
   Card,
   CardHead,
   EmptyState,
+  Field,
+  Notice,
+  ScoreRing,
   Segmented,
   SiteLogo,
   Tabs,
@@ -29,14 +36,23 @@ import {
   btnPrimary,
   inputClass,
 } from "../components/primitives";
+import { Modal } from "../components/Modal";
 import { AreaChart, BarList, DeltaPill, Stars } from "../components/charts";
 import { StatusStatGrid, type StatStatus } from "../components/insights";
-import { useToast } from "../components/Toast";
+import { useActionToast, useToast } from "../components/Toast";
 import { compact, daysAgo, money, relativeTime, shortDate, titleCase } from "../lib/format";
-import { useWorkspace, useWorkspaceData } from "../lib/workspace";
-import type { Cadence, KeywordGap } from "../lib/types";
+import { SOCIAL_PLATFORMS, isRecentPost, platformLabel, summariseSocial } from "../lib/social";
+import { useWorkspace, useWorkspaceData, type PromotionBriefInput } from "../lib/workspace";
+import type { AdAngle, Cadence, KeywordGap, PromotionComponent } from "../lib/types";
 
-type CompetitionTab = "overview" | "inventory" | "keywords" | "ads" | "reviews" | "social";
+type CompetitionTab =
+  | "overview"
+  | "inventory"
+  | "keywords"
+  | "ads"
+  | "reviews"
+  | "social"
+  | "local";
 
 const CADENCE_OPTIONS = [
   { value: "daily" as Cadence, label: "Daily" },
@@ -59,14 +75,40 @@ function opportunity(k: KeywordGap) {
 
 export function CompetitionPage() {
   const toast = useToast();
+  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
   const competitors = workspace.competitors;
+  // Named to stay clear of `inventory` below, which is the competitor's detected
+  // item list rather than our own catalogue.
+  const catalogue = workspace.inventory;
+  const profile = workspace.profile;
   const myBusiness = workspace.metrics;
+  const shareOfVoice = workspace.shareOfVoice;
+  const reviewGaps = workspace.competitorReviewGaps;
+  const localPackRankings = workspace.localPackRankings;
+  const socialPosts = workspace.socialPosts;
+  const socialTargets = workspace.socialMonitorTargets;
   const [activeId, setActiveId] = useState<string>(competitors[0]?.id ?? "");
   const [tab, setTab] = useState<CompetitionTab>("overview");
   const [keywordFilter, setKeywordFilter] = useState<KeywordFilter>("all");
   const [query, setQuery] = useState("");
+  const [benchmarking, setBenchmarking] = useState(false);
+  const [socialScanning, setSocialScanning] = useState(false);
+  const [handleOpen, setHandleOpen] = useState(false);
+  const [handlePlatform, setHandlePlatform] = useState<string>(SOCIAL_PLATFORMS[0]);
+  const [handleValue, setHandleValue] = useState("");
+  /** The post whose angle picker is open, and the angles drafted for it. */
+  const [anglePostId, setAnglePostId] = useState<string | null>(null);
+  const [angles, setAngles] = useState<AdAngle[]>([]);
+  const [angleSource, setAngleSource] = useState<{
+    competitor: string;
+    platform: string;
+    engagementRate: number;
+  } | null>(null);
+  const [angleNote, setAngleNote] = useState("");
+  const [draftingAngles, setDraftingAngles] = useState(false);
+  const [creatingBrief, setCreatingBrief] = useState(false);
 
   const competitor = competitors.find((c) => c.id === activeId) ?? competitors[0];
   const cadence = competitor?.cadence ?? "daily";
@@ -116,10 +158,161 @@ export function CompetitionPage() {
   const trafficStatus: StatStatus =
     trafficShare >= 0.9 ? "within" : trafficShare >= 0.5 ? "observe" : "critical";
 
-  function createOriginalAd(headline: string) {
-    toast(
-      `Ad brief drafted from "${headline}" — open Promotions to review it and send it to the design team.`,
+  // Local benchmark rows for the active competitor.
+  const sov = shareOfVoice.find((row) => row.competitorId === competitor.id);
+  const reviewGap = reviewGaps.find((row) => row.competitorId === competitor.id);
+  const competitorLocals = localPackRankings.filter((row) =>
+    row.pack.some((entry) => entry.name.toLowerCase().includes(competitor.name.toLowerCase())),
+  );
+  // Competitor social, derived from the posts we actually scraped.
+  const theirPosts = socialPosts.filter((post) => post.competitorId === competitor.id);
+  const socialInsight = summariseSocial(socialPosts, competitor.id);
+  const socialTarget = socialTargets.find((target) => target.competitorId === competitor.id);
+
+  const sovComparison = [
+    { label: "You", value: sov?.ourShare ?? 0 },
+    ...shareOfVoice.map((row) => ({ label: row.competitorName, value: row.theirShare })),
+  ];
+
+  async function runBenchmark() {
+    setBenchmarking(true);
+    try {
+      const result = await actions.runCompetitorBenchmark();
+      if (workspace.isSample) {
+        toast("Demo mode — showing the sample benchmark. Add SERPAPI_KEY to run a live one.");
+      } else if (result?.capped) {
+        toast(
+          `Benchmarked ${result.keywords} keyword${result.keywords === 1 ? "" : "s"} — this workspace has used its SerpApi budget for the month.`,
+        );
+      } else {
+        toast("Local competitor benchmark finished.");
+      }
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "The competitor benchmark could not be run.");
+    } finally {
+      setBenchmarking(false);
+    }
+  }
+
+  async function saveHandle() {
+    if (!competitor) return;
+    await actionToast(
+      () => actions.saveCompetitorSocial({ competitorId: competitor.id, platform: handlePlatform, handle: handleValue }),
+      {
+        success: `${platformLabel(handlePlatform)} handle saved — the next social scan will pull it.`,
+        failure: "That handle could not be saved.",
+      },
     );
+    setHandleOpen(false);
+    setHandleValue("");
+  }
+
+  async function scanSocial() {
+    setSocialScanning(true);
+    try {
+      const result = await actions.runSocialScan();
+      if (workspace.isSample) {
+        toast("Demo mode — showing the sample posts. Add APIFY_TOKEN to pull live ones.");
+      } else if (result?.message) {
+        toast(result.message);
+      } else if (result) {
+        toast(
+          `Scanned ${result.scanned} handle${result.scanned === 1 ? "" : "s"} — ${result.posts} post${result.posts === 1 ? "" : "s"} refreshed${result.running ? `, ${result.running} still running (scan again to collect)` : ""}.`,
+        );
+      }
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "The social scan could not be run.");
+    } finally {
+      setSocialScanning(false);
+    }
+  }
+
+  /**
+   * Drafts original angles from one of their posts and opens the picker.
+   *
+   * The angles are ours — the post is only the signal — and drafting creates
+   * nothing. A brief exists only once the user picks one below.
+   */
+  async function openAnglePicker(postId: string) {
+    setAnglePostId(postId);
+    setAngles([]);
+    setAngleSource(null);
+    setAngleNote("");
+    setDraftingAngles(true);
+    try {
+      const draft = await actions.draftAdAngles(postId);
+      if (!draft) {
+        setAngleNote("AI drafting is not configured — add GROQ_API_KEY to the function secrets.");
+        return;
+      }
+      setAngles(draft.angles);
+      setAngleSource({
+        competitor: draft.competitor,
+        platform: draft.source.platform,
+        engagementRate: draft.source.engagementRate,
+      });
+    } catch (cause) {
+      setAngleNote(cause instanceof Error ? cause.message : "Angles could not be drafted.");
+    } finally {
+      setDraftingAngles(false);
+    }
+  }
+
+  /**
+   * Creates a real promotion brief from a headline.
+   *
+   * This is what makes the "build our own" buttons do something: they used to
+   * announce a brief that was never created. The angle's words become the
+   * headline and its reasoning the designer's note; the item it named is looked
+   * up in our own catalogue, and the parts that do not apply are left out rather
+   * than shipped empty.
+   */
+  async function createBrief(input: { headline: string; itemName?: string; notes?: string }) {
+    const wanted = input.itemName?.trim().toLowerCase() ?? "";
+    const item = wanted
+      ? catalogue.find((candidate) => candidate.name.trim().toLowerCase() === wanted)
+      : undefined;
+    const isService = item?.kind === "service";
+
+    const components: PromotionComponent[] = ["logo", "contact"];
+    if (item) {
+      components.splice(1, 0, isService ? "service" : "product");
+      if (!isService && item.price > 0) components.splice(2, 0, "price");
+    }
+
+    const brief: PromotionBriefInput = {
+      name: input.headline.slice(0, 60),
+      itemId: item && !isService ? item.id : null,
+      serviceId: item && isService ? item.id : null,
+      priceItemId: item && !isService && item.price > 0 ? item.id : null,
+      // Prefilled with what we already hold, so the design is not blank. All of
+      // it stays editable in Promotions before anything is sent.
+      contactInfo: profile.primaryDomain,
+      template: "square",
+      accentColor: "#4f46e5",
+      components,
+      discountKind: "percent",
+      discountValue: 10,
+      dealText: "",
+      couponCode: "",
+      headline: input.headline,
+      notes: input.notes ?? "",
+      status: "submitted",
+    };
+
+    setCreatingBrief(true);
+    try {
+      await actions.savePromotionBrief(brief);
+      toast(
+        `Brief "${brief.name}" created — open Promotions to review it and send it to the design team.`,
+      );
+      setAnglePostId(null);
+      setAngles([]);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "That brief could not be created.");
+    } finally {
+      setCreatingBrief(false);
+    }
   }
 
   return (
@@ -154,16 +347,20 @@ export function CompetitionPage() {
               options={CADENCE_OPTIONS}
               value={cadence}
               onChange={(v) => {
-                void actions.setCompetitorCadence(competitor.id, v);
-                toast(`${competitor.name} will now be scanned ${v}.`);
+                void actionToast(() => actions.setCompetitorCadence(competitor.id, v), {
+                  success: `${competitor.name} will now be scanned ${v}.`,
+                  failure: `The scan cadence for ${competitor.name} could not be saved.`,
+                });
               }}
             />
             <button
               type="button"
               className={btnGhost}
               onClick={() => {
-                void actions.scanCompetitor(competitor.id);
-                toast(`Scan queued for ${competitor.name} — results land with the next job run.`);
+                void actionToast(() => actions.scanCompetitor(competitor.id), {
+                  success: `Scan queued for ${competitor.name} — results land with the next job run.`,
+                  failure: `The scan for ${competitor.name} could not be queued.`,
+                });
               }}
             >
               <RefreshCw size={13} /> Scan now
@@ -238,6 +435,7 @@ export function CompetitionPage() {
           },
           { value: "reviews", label: "Reviews", icon: <MessageSquareQuote size={13} /> },
           { value: "social", label: "Social", icon: <Share2 size={13} /> },
+          { value: "local", label: "Local", icon: <MapPin size={13} /> },
         ]}
       />
 
@@ -521,7 +719,13 @@ export function CompetitionPage() {
                     <button
                       type="button"
                       className={btnPrimary}
-                      onClick={() => createOriginalAd(ad.headline)}
+                      disabled={creatingBrief}
+                      onClick={() =>
+                        void createBrief({
+                          headline: ad.headline,
+                          notes: `${competitor?.name ?? "A competitor"} is running this ad: ${ad.focus}. Build our own version of the offer.`,
+                        })
+                      }
                     >
                       <Sparkles size={13} /> Build our own
                     </button>
@@ -604,25 +808,447 @@ export function CompetitionPage() {
         </Card>
       ) : null}
 
+      {tab === "local" ? (
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+            <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <MapPin size={16} className="text-indigo-600" />
+              Google local &amp; share of voice
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              {sov ? (
+                <span className="text-[11px] text-slate-500">
+                  Benchmarked {relativeTime(sov.checkedAt)} · {sov.termCount} tracked terms
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={() => void runBenchmark()}
+                disabled={benchmarking}
+              >
+                <RefreshCw size={14} className={benchmarking ? "animate-spin" : ""} />
+                {benchmarking ? "Benchmarking…" : "Run benchmark"}
+              </button>
+            </span>
+          </div>
+
+          {!sov && !reviewGap ? (
+            <Card>
+              <CardHead
+                icon={<Trophy size={16} />}
+                title="No local benchmark yet"
+                subtitle="Compare your Google share of voice and review counts against this competitor"
+              />
+              <EmptyState
+                title="Nothing to compare yet"
+                hint="Run the benchmark to pull your top-10 share and both Maps ratings from Google."
+              />
+            </Card>
+          ) : (
+            <div className="grid gap-5 xl:grid-cols-2">
+              <Card>
+                <CardHead
+                  icon={<Trophy size={16} />}
+                  title="Share of Voice"
+                  subtitle={`How often each business appears in the Google top 10 for your ${sov?.termCount ?? 0} tracked terms`}
+                />
+                <div className="space-y-4 px-4 py-4">
+                  {sov ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-lg bg-indigo-50 px-3 py-2">
+                        <p className="text-[11px] text-indigo-700">Your share</p>
+                        <p className="text-xl font-semibold text-indigo-900">{sov.ourShare}%</p>
+                        <p className="text-[11px] text-indigo-700">
+                          top 10 for {sov.ourTop10}/{sov.termCount} terms
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] text-slate-500">{sov.competitorName}</p>
+                        <p className="text-xl font-semibold text-slate-900">{sov.theirShare}%</p>
+                        <p className="text-[11px] text-slate-500">
+                          top 10 for {sov.theirTop10}/{sov.termCount} terms
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                  <BarList
+                    data={sovComparison}
+                    valueFormat={(n) => `${n}%`}
+                    color="#4f46e5"
+                  />
+                  {sov ? (
+                    <p className="text-[11px] text-slate-500">
+                      {sov.ourShare >= sov.theirShare
+                        ? `You lead ${competitor.name} on share of voice by ${(sov.ourShare - sov.theirShare).toFixed(1)} points.`
+                        : `${competitor.name} leads you on share of voice by ${(sov.theirShare - sov.ourShare).toFixed(1)} points — publish comparison pages for the terms they hold.`}
+                    </p>
+                  ) : null}
+                </div>
+              </Card>
+
+              <Card>
+                <CardHead
+                  icon={<MessageSquareQuote size={16} />}
+                  title="Competitor review gap"
+                  subtitle="Reviews and average rating pulled from both Google Maps listings"
+                />
+                {!reviewGap ? (
+                  <EmptyState
+                    title="No review gap yet"
+                    hint="Run the benchmark to compare your Maps rating and review count."
+                  />
+                ) : (
+                  <div className="space-y-4 px-4 py-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] text-slate-500">Your reviews</p>
+                        <p className="text-xl font-semibold text-slate-900">
+                          {reviewGap.ourReviews.toLocaleString()}
+                        </p>
+                        <Stars rating={reviewGap.ourRating} size={14} />
+                      </div>
+                      <div className="rounded-lg bg-slate-50 px-3 py-2">
+                        <p className="text-[11px] text-slate-500">{reviewGap.competitorName}</p>
+                        <p className="text-xl font-semibold text-slate-900">
+                          {reviewGap.theirReviews.toLocaleString()}
+                        </p>
+                        <Stars rating={reviewGap.theirRating} size={14} />
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge tone={reviewGap.reviewGap > 0 ? "bad" : "good"}>
+                        {reviewGap.reviewGap > 0
+                          ? `They have ${reviewGap.reviewGap.toLocaleString()} more reviews`
+                          : `You have ${Math.abs(reviewGap.reviewGap).toLocaleString()} more reviews`}
+                      </Badge>
+                      <Badge tone={reviewGap.ratingGap >= 0 ? "good" : "bad"}>
+                        {reviewGap.ratingGap >= 0
+                          ? `You rate +${reviewGap.ratingGap.toFixed(1)}`
+                          : `They rate +${Math.abs(reviewGap.ratingGap).toFixed(1)}`}
+                      </Badge>
+                    </div>
+                    <div className="flex justify-around">
+                      <ScoreRing
+                        score={Math.round((reviewGap.ourRating / 5) * 100)}
+                        label="You"
+                        tone="good"
+                      />
+                      <ScoreRing
+                        score={Math.round((reviewGap.theirRating / 5) * 100)}
+                        label={competitor.name}
+                        tone={reviewGap.ratingGap >= 0 ? "warn" : "bad"}
+                      />
+                    </div>
+                  </div>
+                )}
+              </Card>
+            </div>
+          )}
+
+          <Card>
+            <CardHead
+              icon={<Target size={16} />}
+              title="Local pack positions"
+              subtitle={`Where you and ${competitor.name} sit in the map 3-pack for local keywords`}
+            />
+            {competitorLocals.length === 0 ? (
+              <EmptyState
+                title="They are not in any tracked pack"
+                hint="Run a local scan to see which map packs they hold."
+              />
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {competitorLocals.map((row) => {
+                  const theirs = row.pack.find(
+                    (entry) => entry.name.toLowerCase().includes(competitor.name.toLowerCase()),
+                  );
+                  return (
+                    <li key={row.keyword} className="px-4 py-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-slate-900">{row.keyword}</span>
+                        <span className="flex items-center gap-2">
+                          {row.inPack ? (
+                            <Badge tone="good">You hold #{row.packPosition}</Badge>
+                          ) : (
+                            <Badge tone="warn">You are not in the pack</Badge>
+                          )}
+                          {theirs ? <Badge tone="bad">They hold #{theirs.position}</Badge> : null}
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
+        </div>
+      ) : null}
+
       {tab === "social" ? (
-        <Card>
+        <div className="space-y-5">
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+            <span className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <Share2 size={16} className="text-indigo-600" />
+              Recent posts they published
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              <span className="text-[11px] text-slate-500">
+                {socialTarget?.lastScrapedAt
+                  ? `Last scanned ${relativeTime(socialTarget.lastScrapedAt)}`
+                  : "Not scanned yet"}
+              </span>
+              <button
+                type="button"
+                className={btnPrimary}
+                onClick={() => void scanSocial()}
+                disabled={socialScanning}
+              >
+                <RefreshCw size={14} className={socialScanning ? "animate-spin" : ""} />
+                {socialScanning ? "Scanning…" : "Scan posts now"}
+              </button>
+            </span>
+          </div>
+
+          {socialTarget?.lastError ? (
+            <Notice
+              tone="warn"
+              title={`Last scan problem — ${socialTarget.platform} ${socialTarget.handle}`}
+            >
+              {socialTarget.lastError}
+            </Notice>
+          ) : null}
+
+          <div className="grid gap-5 xl:grid-cols-3">
+            <Card className="xl:col-span-2">
+              <CardHead
+                icon={<ImageIcon size={16} />}
+                title="Recent posts"
+                subtitle={`Their public posts, newest first — captions and engagement, never their artwork`}
+                action={<Badge tone="brand">{theirPosts.length} tracked</Badge>}
+              />
+              {theirPosts.length === 0 ? (
+                <EmptyState
+                  title="No posts captured yet"
+                  hint="Run a social scan to pull their most recent public posts."
+                />
+              ) : (
+                <ul className="divide-y divide-slate-100">
+                  {theirPosts.slice(0, 8).map((post) => (
+                    <li key={post.id} className="flex gap-3 px-4 py-3">
+                      {post.mediaUrl ? (
+                        <img
+                          src={post.mediaUrl}
+                          alt=""
+                          className="h-16 w-16 shrink-0 rounded-lg bg-slate-100 object-cover"
+                        />
+                      ) : (
+                        <div className="h-16 w-16 shrink-0 rounded-lg bg-slate-100" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone="neutral">{platformLabel(post.platform)}</Badge>
+                          {isRecentPost(post) ? <Badge tone="good">New</Badge> : null}
+                          <span className="text-[11px] text-slate-500">
+                            {post.postedAt ? relativeTime(post.postedAt) : "date unknown"}
+                          </span>
+                        </div>
+                        <p className="mt-1 line-clamp-2 text-xs text-slate-700">
+                          {post.caption || "No caption"}
+                        </p>
+                        <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                          <span className="font-medium text-slate-700">
+                            {post.engagementRate}% engagement
+                          </span>
+                          <span>{compact(post.likes)} likes</span>
+                          <span>{compact(post.comments)} comments</span>
+                          {post.views > 0 ? <span>{compact(post.views)} views</span> : null}
+                          {post.url ? (
+                            <a
+                              href={post.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-indigo-600 hover:underline"
+                            >
+                              View <ExternalLink size={11} />
+                            </a>
+                          ) : null}
+                        </p>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
+                Their posts are a signal, never artwork. Every "build our own" action writes an
+                original brief for your brand.
+              </div>
+            </Card>
+
+            <div className="space-y-5">
+              <Card>
+                <CardHead
+                  icon={<Trophy size={16} />}
+                  title="Top post this cycle"
+                  subtitle={`Their best-engaging post in the last 30 days`}
+                />
+                {!socialInsight.bestPost ? (
+                  <EmptyState
+                    title="Nothing to compare yet"
+                    hint="Run a social scan to see which of their posts landed hardest."
+                  />
+                ) : (
+                  <div className="space-y-3 px-4 py-4">
+                    <div className="rounded-lg bg-indigo-50 px-3 py-2">
+                      <p className="text-[11px] text-indigo-700">
+                        {platformLabel(socialInsight.bestPost.platform)} ·{" "}
+                        {socialInsight.bestPost.postedAt
+                          ? relativeTime(socialInsight.bestPost.postedAt)
+                          : "date unknown"}
+                      </p>
+                      <p className="text-xl font-semibold text-indigo-900">
+                        {socialInsight.bestPost.engagementRate}% engagement
+                      </p>
+                      <p className="text-[11px] text-indigo-700">
+                        {compact(socialInsight.bestPost.likes)} likes ·{" "}
+                        {compact(socialInsight.bestPost.comments)} comments
+                      </p>
+                    </div>
+                    <p className="text-xs text-slate-700">
+                      {socialInsight.bestPost.caption || "No caption"}
+                    </p>
+                    {socialInsight.previousBest ? (
+                      <p className="text-[11px] text-slate-500">
+                        {socialInsight.bestPost.engagementRate >
+                        socialInsight.previousBest.engagementRate
+                          ? `This beats their earlier record of ${socialInsight.previousBest.engagementRate}%.`
+                          : `Their earlier record of ${socialInsight.previousBest.engagementRate}% still stands.`}
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={btnGhost}
+                      disabled={!socialInsight.bestPost}
+                      onClick={() =>
+                        socialInsight.bestPost && void openAnglePicker(socialInsight.bestPost.id)
+                      }
+                    >
+                      <Sparkles size={13} /> Build our own from this angle
+                    </button>
+                  </div>
+                )}
+              </Card>
+
+              <Card>
+                <CardHead
+                  icon={<Target size={16} />}
+                  title="Cadence & engagement"
+                  subtitle="Measured from the posts we scraped, not their published claims"
+                />
+                {socialInsight.posts === 0 ? (
+                  <EmptyState
+                    title="No measured cadence yet"
+                    hint="The first social scan fills this in."
+                  />
+                ) : (
+                  <dl className="grid grid-cols-2 gap-2 px-4 py-4 text-[11px]">
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Posts / week</dt>
+                      <dd className="font-semibold text-slate-900">{socialInsight.postsPerWeek}</dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Avg engagement</dt>
+                      <dd className="font-semibold text-slate-900">
+                        {socialInsight.averageEngagement}%
+                      </dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Last 24 hours</dt>
+                      <dd
+                        className={`font-semibold ${
+                          socialInsight.postsLast24Hours >= 3 ? "text-rose-600" : "text-slate-900"
+                        }`}
+                      >
+                        {socialInsight.postsLast24Hours}
+                      </dd>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <dt className="text-slate-500">Posts tracked</dt>
+                      <dd className="font-semibold text-slate-900">{socialInsight.posts}</dd>
+                    </div>
+                    {socialInsight.topHashtags.length ? (
+                      <div className="col-span-2">
+                        <dt className="text-slate-500">Their recurring hashtags</dt>
+                        <dd className="mt-1 flex flex-wrap gap-1">
+                          {socialInsight.topHashtags.map((tag) => (
+                            <Badge key={tag.tag} tone="neutral">
+                              #{tag.tag} ×{tag.count}
+                            </Badge>
+                          ))}
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                )}
+              </Card>
+            </div>
+          </div>
+
+          <Card>
           <CardHead
             icon={<Share2 size={16} />}
             title="Social presence"
             subtitle="Where they publish and how much they engage"
+            action={
+              <button
+                type="button"
+                className={btnGhost}
+                onClick={() => {
+                  setHandleValue("");
+                  setHandleOpen(true);
+                }}
+              >
+                <Plus size={13} /> Add handle
+              </button>
+            }
           />
           {competitor.social.length === 0 ? (
             <EmptyState
-              title="No social channels captured yet"
-              hint="Their handles are scored on the next scan."
+              title="No social channels monitored yet"
+              hint="Add their Instagram, TikTok, Facebook or X handle and the next scan pulls their recent posts."
             />
           ) : (
             <ul className="grid gap-3 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
               {competitor.social.map((s) => (
                 <li key={s.platform} className="rounded-xl border border-slate-200 p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-slate-900">{s.platform}</span>
-                    <span className="text-xs text-slate-500">{s.handle}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-slate-900">
+                      {platformLabel(s.platform)}
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="truncate text-xs text-slate-500">{s.handle}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-rose-600"
+                        title={`Stop monitoring ${platformLabel(s.platform)}`}
+                        aria-label={`Stop monitoring ${platformLabel(s.platform)}`}
+                        onClick={() =>
+                          void actionToast(
+                            () =>
+                              actions.removeCompetitorSocial({
+                                competitorId: competitor.id,
+                                platform: s.platform,
+                              }),
+                            {
+                              success: `Stopped monitoring ${platformLabel(s.platform)}.`,
+                              failure: "That handle could not be removed.",
+                            },
+                          )
+                        }
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </span>
                   </div>
                   <dl className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
                     <div className="rounded-lg bg-slate-50 px-2 py-1.5">
@@ -650,8 +1276,120 @@ export function CompetitionPage() {
               ))}
             </ul>
           )}
-        </Card>
+          </Card>
+        </div>
       ) : null}
+
+      {/* ------------------------------------------------ AI angle picker */}
+      <Modal
+        open={Boolean(anglePostId)}
+        onClose={() => setAnglePostId(null)}
+        title="Angles from their top post"
+        subtitle="Original angles drawn from what worked for them — pick one to brief a designer"
+        icon={<Sparkles size={16} />}
+        footer={
+          <button type="button" className={btnGhost} onClick={() => setAnglePostId(null)}>
+            Close
+          </button>
+        }
+      >
+        <div className="space-y-3 px-4 py-4">
+          {draftingAngles ? (
+            <p className="text-[12px] text-slate-500">Reading their post and drafting angles…</p>
+          ) : angleNote ? (
+            <Notice tone="warn" title="No angles yet">
+              {angleNote}
+            </Notice>
+          ) : (
+            <>
+              {angleSource ? (
+                <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  Built from {angleSource.competitor ? `${angleSource.competitor}'s ` : "their "}
+                  {platformLabel(angleSource.platform)} post ({angleSource.engagementRate}% engagement).
+                  Their wording is not reused — these are our own angles.
+                </p>
+              ) : null}
+              {angles.map((angle) => (
+                <div key={angle.headline} className="rounded-xl border border-slate-200 p-3">
+                  <p className="text-sm font-semibold text-slate-900">{angle.headline}</p>
+                  {angle.rationale ? (
+                    <p className="mt-1 text-[11px] text-slate-600">{angle.rationale}</p>
+                  ) : null}
+                  {angle.itemHint ? (
+                    <p className="mt-1 text-[11px] text-slate-500">Built around: {angle.itemHint}</p>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={`${btnPrimary} mt-2`}
+                    disabled={creatingBrief}
+                    onClick={() =>
+                      void createBrief({
+                        headline: angle.headline,
+                        itemName: angle.itemHint,
+                        notes: angle.rationale,
+                      })
+                    }
+                  >
+                    <Sparkles size={13} /> Create this brief
+                  </button>
+                </div>
+              ))}
+              <p className="text-[11px] text-slate-500">
+                Creating a brief sends it to the design team — nothing is published from here.
+              </p>
+            </>
+          )}
+        </div>
+      </Modal>
+
+      {/* ------------------------------------------------ add a social handle */}
+      <Modal
+        open={handleOpen}
+        onClose={() => setHandleOpen(false)}
+        title="Add a social handle"
+        subtitle={competitor ? `So their public posts can be monitored` : undefined}
+        icon={<Share2 size={16} />}
+        footer={
+          <>
+            <button type="button" className={btnGhost} onClick={() => setHandleOpen(false)}>
+              Cancel
+            </button>
+            <button type="button" className={btnPrimary} onClick={() => void saveHandle()}>
+              <Plus size={13} /> Save handle
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4 px-4 py-4">
+          <Field label="Platform">
+            <select
+              className={inputClass}
+              value={handlePlatform}
+              onChange={(event) => setHandlePlatform(event.target.value)}
+            >
+              {SOCIAL_PLATFORMS.map((platform) => (
+                <option key={platform} value={platform}>
+                  {platformLabel(platform)}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Their handle or profile URL"
+            hint="e.g. @glowmartbeauty, or the full profile URL. Only their public posts are read."
+          >
+            <input
+              className={inputClass}
+              placeholder="@glowmartbeauty"
+              value={handleValue}
+              onChange={(event) => setHandleValue(event.target.value)}
+            />
+          </Field>
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+            Their posts are treated as a market signal — never republished as your own creative.
+          </p>
+        </div>
+      </Modal>
     </div>
   );
 }

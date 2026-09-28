@@ -12,6 +12,35 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
+/** What to say when an action succeeds, and a fallback for when it does not. */
+export interface ActionMessages {
+  success: string;
+  failure: string;
+}
+
+/**
+ * Runs an async workspace action and reports how it went: the success message on
+ * resolve, the thrown error's own message on reject.
+ *
+ * Pages use this instead of `void action(); toast(...)` because a fire-and-forget
+ * call announces success whatever happens — the workspace `error` state is not
+ * rendered once data has loaded, so a failed write used to be invisible.
+ */
+export function useActionToast() {
+  const toast = useToast();
+  return useCallback(
+    async (run: () => Promise<unknown>, messages: ActionMessages) => {
+      try {
+        await run();
+        toast(messages.success);
+      } catch (cause) {
+        toast(cause instanceof Error ? cause.message : messages.failure);
+      }
+    },
+    [toast],
+  );
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
 

@@ -30,7 +30,7 @@ import {
 } from "../components/primitives";
 import { AreaChart } from "../components/charts";
 import { Modal } from "../components/Modal";
-import { useToast } from "../components/Toast";
+import { useActionToast, useToast } from "../components/Toast";
 import { alertsFor } from "../lib/alerts";
 import { cadenceLabel, daysAgo, money, relativeTime, shortDate, titleCase } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
@@ -90,6 +90,7 @@ function priceDelta(item: SupplierItem) {
 
 export function SuppliersPage() {
   const toast = useToast();
+  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
   const suppliers = workspace.suppliers;
@@ -148,15 +149,17 @@ export function SuppliersPage() {
       : "daily";
 
   function setAllCadence(value: Cadence) {
-    void Promise.all(suppliers.map((s) => actions.setSupplierCadence(s.id, value)));
-    toast(
-      `All ${suppliers.length} supplier sites will now be checked ${cadenceLabel(value).toLowerCase()}.`,
-    );
+    void actionToast(() => Promise.all(suppliers.map((s) => actions.setSupplierCadence(s.id, value))), {
+      success: `All ${suppliers.length} supplier sites will now be checked ${cadenceLabel(value).toLowerCase()}.`,
+      failure: "The supplier scan cadence could not be saved.",
+    });
   }
 
   function scanAll() {
-    void Promise.all(suppliers.map((s) => actions.scanSupplier(s.id)));
-    toast(`Scan queued for all ${suppliers.length} supplier sites — results land with the next job run.`);
+    void actionToast(() => Promise.all(suppliers.map((s) => actions.scanSupplier(s.id))), {
+      success: `Scan queued for all ${suppliers.length} supplier sites — results land with the next job run.`,
+      failure: "Those scans could not be queued.",
+    });
   }
 
   function exportCsv() {
