@@ -7,7 +7,7 @@ import {
 } from "./apify.ts";
 import { getEnv, hasEnv, requireEnv } from "./env.ts";
 import { HttpError } from "./errors.ts";
-import { serpApi } from "./serpapi.ts";
+import { localResultsOf, serpApi } from "./serpapi.ts";
 
 /**
  * Review reading and replying, without a dedicated review-monitoring vendor.
@@ -368,7 +368,7 @@ async function resolveGooglePlace(handle: string): Promise<{ data_id?: string; p
 
   const query = trimmed.replace(/^https?:\/\//, "").replace(/\/+$/, "");
   const response = await serpApi({ engine: "google_maps", q: query || trimmed, hl: "en" });
-  const place = response.place_results ?? response.local_results?.[0];
+  const place = response.place_results ?? localResultsOf(response)[0];
   if (place?.data_id) return { data_id: String(place.data_id) };
   if (place?.place_id) return { place_id: String(place.place_id) };
 
@@ -391,7 +391,7 @@ async function resolveTripadvisorPlace(handle: string): Promise<string> {
   const response = await serpApi({ engine: "tripadvisor", q: query || trimmed, tripadvisor_domain: "www.tripadvisor.com" });
   const candidates = [
     response.place_results,
-    ...(response.local_results ?? []),
+    ...localResultsOf(response),
   ] as Record<string, unknown>[];
   for (const candidate of candidates) {
     const id = firstString(candidate?.place_id);

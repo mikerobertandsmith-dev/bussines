@@ -294,21 +294,31 @@ describe("features a configured provider cannot serve", () => {
     expect(inactiveFeaturesFor("apify", has(["APIFY_TOKEN"]))).toEqual([
       "Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID to switch it on.",
       "Website catalogue reading is off — add APIFY_SITE_ACTOR_ID to switch it on.",
+      "Website traffic estimates is off — add APIFY_TRAFFIC_ACTOR_ID to switch it on.",
+      "Competitor advertising is off — add APIFY_ADS_ACTOR_ID to switch it on.",
     ]);
 
-    // The site read behind the Suppliers and Competition pages runs on the website
-    // crawler the deployment already has, so setting that one clears both lines:
-    // there is no second secret to add for those pages.
+    // The contacts crawler is not a substitute for the catalogue actor: it returns
+    // no product rows and no page JSON-LD, so a catalogue read through it bills,
+    // reports success and writes nothing. The line therefore stays until the
+    // catalogue actor's own id is set — which is what makes the silent-empty-
+    // catalogue failure visible instead of leaving the panel saying "configured".
     expect(
       inactiveFeaturesFor("apify", has(["APIFY_TOKEN", "APIFY_CONTACTS_ACTOR_ID"])),
-    ).toEqual([]);
+    ).toEqual([
+      "Website catalogue reading is off — add APIFY_SITE_ACTOR_ID to switch it on.",
+      "Website traffic estimates is off — add APIFY_TRAFFIC_ACTOR_ID to switch it on.",
+      "Competitor advertising is off — add APIFY_ADS_ACTOR_ID to switch it on.",
+    ]);
 
-    // Its own slot is an override rather than a requirement, and either being set
-    // is enough for the capability the two share.
+    // The two capabilities have separate actor slots and are reported on their own
+    // evidence, so one being set says nothing about the other.
     expect(
       inactiveFeaturesFor("apify", has(["APIFY_TOKEN", "APIFY_SITE_ACTOR_ID"])),
     ).toEqual([
       "Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID to switch it on.",
+      "Website traffic estimates is off — add APIFY_TRAFFIC_ACTOR_ID to switch it on.",
+      "Competitor advertising is off — add APIFY_ADS_ACTOR_ID to switch it on.",
     ]);
   });
 
@@ -316,7 +326,13 @@ describe("features a configured provider cannot serve", () => {
     expect(
       inactiveFeaturesFor(
         "apify",
-        has(["APIFY_TOKEN", "APIFY_CONTACTS_ACTOR_ID", "APIFY_SITE_ACTOR_ID"]),
+        has([
+          "APIFY_TOKEN",
+          "APIFY_CONTACTS_ACTOR_ID",
+          "APIFY_SITE_ACTOR_ID",
+          "APIFY_TRAFFIC_ACTOR_ID",
+          "APIFY_ADS_ACTOR_ID",
+        ]),
       ),
     ).toEqual([]);
   });

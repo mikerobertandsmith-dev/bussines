@@ -24,6 +24,23 @@ export interface Supplier {
   leadTimeDays: number;
   /** Free text the user keeps about the supplier. Optional: most have none. */
   notes?: string;
+  /**
+   * True while a catalogue crawl of this supplier's site has been paid for and not
+   * yet read back — `suppliers.site_run_id` is set (migration `0021`). Written by
+   * `site-scan`; read by pull-to-refresh, which collects such a run even inside
+   * the pull cap rather than leaving a dataset the user already paid for unread.
+   */
+  siteScanPending?: boolean;
+  /**
+   * When a catalogue read of this supplier last **settled**, whether or not it
+   * produced anything (`suppliers.site_scan_at`). Distinct from `lastScan`, which
+   * moves only on a read that produced something: a source whose site publishes no
+   * catalogue settles every time and would otherwise look untouched forever. This
+   * is what tells "read cleanly, nothing published" from "never read".
+   */
+  siteScanAt?: string;
+  /** Why the last catalogue read failed, when it did (`suppliers.site_error`). */
+  siteError?: string;
 }
 
 export interface SupplierItem {
@@ -200,6 +217,12 @@ export interface Competitor {
   contactsStatus?: string;
   /** When discovery last completed for this competitor. */
   contactsScannedAt?: string;
+  /**
+   * The supplier-page equivalent of {@link Supplier.siteScanPending}: true while
+   * `competitors.site_run_id` (migration `0021`) holds a crawl this workspace has
+   * already paid for and not yet collected.
+   */
+  siteScanPending?: boolean;
 }
 
 /* ---------------- Clients ---------------- */
@@ -415,8 +438,17 @@ export interface RankRow {
 export interface GeoRankRow {
   prompt: string;
   engine: string;
+  /**
+   * 0 when the AI answer did not mention us, otherwise our place among the sources
+   * it listed (or 1 when it named us only in the prose).
+   *
+   * Deliberately not a rank: an AI answer has no "position 7". Rendering one would
+   * invent a number the answer does not contain, which is why the table shows
+   * cited / not cited and keeps the index here for the detail it does carry.
+   */
   position: number;
-  change: number;
+  /** How many sources the answer drew on — the size of the field we were cited in. */
+  sources: number;
 }
 
 export interface ReviewSource {

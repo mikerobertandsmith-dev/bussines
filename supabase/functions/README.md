@@ -45,6 +45,12 @@ web-contacts-scan/
   index.ts           reads a competitor's own site (Apify) and *proposes* its social profiles
 site-scan/
   index.ts           reads a watched supplier's / competitor's own catalogue and writes what changed
+traffic-scan/
+  index.ts           estimated monthly visits + channel mix for our domain and every rival's (Apify)
+ads-scan/
+  index.ts           competitors' live Meta ads, for the ones whose Facebook page is on file (Apify)
+buy-list/
+  index.ts           builds the Buy list from rival catalogue reads already on file — no provider
 reviews-sync/
   index.ts           pulls each connected review profile into `my_reviews` (SerpApi/Apify)
 review-reply/
@@ -162,18 +168,71 @@ and it is deliberately a *separate* setting to `APIFY_MAX_CHARGE_USD`'s `$0.25`.
 (`APIFY_CONTACTS_MAX_PAGES`) and the dollars are the real guards.
 
 `site-scan` reads a watched supplier's or competitor's **own catalogue**, and is what the pull-to-refresh
-gesture on Suppliers and Competition runs. It needs no secret of its own: a supplier's site and a
-competitor's site are the same thing to this read — a business with a website — so it runs the website
-actor the deployment already has, `APIFY_CONTACTS_ACTOR_ID` (the crawler behind competitor discovery),
-and each page therefore reports itself configured for free. `APIFY_SITE_ACTOR_ID` is an optional
-override: set it once to hand the read a dedicated product-catalogue actor instead of that crawler.
-Only a deployment with no website actor at all reports the feature as off.
+gesture on Suppliers and Competition runs. It **requires** `APIFY_SITE_ACTOR_ID`, a product-catalogue
+actor — one value for both pages, because a supplier's site and a competitor's site are the same thing to
+this read, a business with a website. The contacts crawler (`APIFY_CONTACTS_ACTOR_ID`) is **not** a
+substitute: it returns contact details with no product rows and no page JSON-LD, so a catalogue read
+through it starts, bills and reports `succeeded` while writing 0 rows, and nothing surfaces to say so.
+The actor must also understand `discoverProducts`, or it reads the home page as a single product page and
+stores its `<title>` as a product name. Two deployment details: use the **bare actor id** (the gateway
+URI-encodes it into `/actors/{id}/runs`, so an `owner/name` slug does not resolve), and expect 0 rows
+from a site that publishes no readable `robots.txt`/sitemap — a factory site with no shopfront — though
+that read is not charged. The Integrations panel reports this feature off until the id is set, which is
+the check that catches the silent-empty-catalogue failure.
 `APIFY_SITE_MAX_CHARGE_USD` deliberately does *not* reuse `APIFY_MAX_CHARGE_USD`'s `$0.25`: that value
 was chosen for a per-result social scrape, and a page-crawling actor's own floor can sit above it,
 where Apify refuses the run outright (`max-total-charge-usd-below-minimum`) — a refusal, not a tighter
 cap. Raise it above the configured actor's floor. `APIFY_SITE_MAX_PAGES` is the reach (product listings
 are paginated, so a crawl has to follow links); `APIFY_SITE_MAX_ITEMS` bounds the rows kept from one
 read; `APIFY_SITE_RUN_TIMEOUT_SECS` is Apify's own kill switch.
+
+`traffic-scan` is the **only** producer of the traffic figures on My Business and Competition: without
+`APIFY_TRAFFIC_ACTOR_ID`, `businesses.monthly_visits`, the `traffic` and `channel` series in
+`my_metrics`, and the `traffic` / `traffic_source` rows in `competitor_metrics` are never written, so
+every traffic tile reads 0 and every traffic chart draws nothing. One run prices our domain and every
+rival's together (`{ domains: [...] }`), returning an estimated monthly visit figure, a three-month
+series and the channel mix. The numbers are SimilarWeb's **estimates** — modelled, not counted — which
+is why the panels say "estimated", and a domain the provider has no data for is reported as
+unavailable rather than stored as zero visits, because "nothing was measured" and "nobody visited" are
+different facts. `APIFY_TRAFFIC_MAX_CHARGE_USD`, `APIFY_TRAFFIC_MAX_DOMAINS` and
+`APIFY_TRAFFIC_RUN_TIMEOUT_SECS` bound it; the pull drives it like the other scans.
+
+`ads-scan` is the **only** producer of `competitor_ads`, which is what Competition's *Active ad
+campaigns* tile counts; it needs `APIFY_ADS_ACTOR_ID`. It reads Meta's Ad Library, and it does so for
+a competitor **only when that competitor's Facebook page is saved** (Competition → Social presence).
+That restriction is the whole design: the library's free-text search does not return the advertiser you
+asked for — a live search for *Patagonia* returned Mapu Lahual Chile, Rue La La, On Water Expeditions
+and MRCOOL, and `search_type=page` returned the same set — so a result is attributed only when its
+advertiser's page name or profile handle matches the competitor exactly. Competitors without a page are
+reported in `skipped` with the one action that fixes it, and 0 rows then means "not read" rather than
+"not advertising" (the tile shows an em dash instead of a zero). One run covers every addressable
+competitor, and the same run writes each advertiser's live-ad count back onto its
+`competitor_social.ads_running`, which is what the Social tab's per-channel "Ads live" reads.
+
+`buy-list` calls no provider at all. It derives the Buy list from readings already on file — what
+each rival newly listed, matched against the tracked terms — and writes
+`inventory_recommendations`, which **nothing else wrote**, so the tab was empty in every workspace.
+Every row names the rival in `competitor_ref` and explains itself in `reason`; it writes the rival's
+*shelf price* as `estimated_price` and leaves `margin_pct` and `suggested_qty` null, because no cost or
+sales data exists on the server and a number invented for those columns would be acted on as though it
+were a calculation. It never rewrites a row the user has starred (the star lives in `buy_list_items`
+pointing at the recommendation id), so a repeat run is idempotent — and it records no `scan_runs` row,
+because a scan row for a read that never happened is the thing `scan_runs` exists to prevent.
+It is also the one live scan in the pull that keeps working while a provider is refusing us.
+
+### When Apify refuses every run
+
+On 2026-09-29 the account hit its **$5 monthly hard limit** ($5.07 used) and every Apify call began
+answering `403 platform-feature-disabled: Monthly usage hard limit exceeded`. Six unrelated panels
+stopped at once — supplier catalogues, competitor inventory, social, traffic, advertising — and each
+looked separately broken, because the message reached the user as `Provider request failed (403)`.
+`providerRefusal()` in `_shared/http.ts` now names the state and what fixes it, and raises a spent
+allowance as 429 so callers stop rather than retrying a refusal.
+
+The spend came from `site-scan`: this actor bills **per product returned**, so `APIFY_SITE_MAX_ITEMS` is
+the price of a read. At 200 items one Cotopaxi read cost **$1.00** — its `APIFY_SITE_MAX_CHARGE_USD`
+ceiling, hit exactly — and four of them spent the month. The defaults are now 60 items / $0.30. Keep
+them tight: a read runs per watched source on every pull.
 
 `GROQ_API_KEY` switches on AI drafting. It is the only drafting variable that has to be set: the
 endpoint defaults to Groq's OpenAI-compatible API and the model to `openai/gpt-oss-120b` (Groq's
@@ -207,6 +266,9 @@ supabase functions deploy keyword-ideas --no-verify-jwt
 supabase functions deploy social-scan --no-verify-jwt
 supabase functions deploy web-contacts-scan --no-verify-jwt
 supabase functions deploy site-scan --no-verify-jwt
+supabase functions deploy traffic-scan --no-verify-jwt
+supabase functions deploy ads-scan --no-verify-jwt
+supabase functions deploy buy-list --no-verify-jwt
 supabase functions deploy reviews-sync --no-verify-jwt
 supabase functions deploy review-reply --no-verify-jwt
 # Inbound provider webhook — also fine without the platform JWT check.
@@ -258,13 +320,36 @@ secret is set.
   typed; the migration that adds them is `0022`.
 - `site-scan` is the supplier/competitor catalogue read behind the Suppliers and Competition pages.
   A row in `supplier_items` / `competitor_items` is a **change**, never a snapshot: `change` is the
-  enum those pages filter on ("New products", "Price moves", "Stock moves"), so a product read again
-  unchanged is not written at all. Writing it as `new_product` — the only value left over — would
+  enum those pages filter on ("New products"; the Suppliers page also dropped "Price moves" and
+  "Stock moves", because no source we read publishes a comparable buy price or stock level), so a
+  product read again unchanged is not written at all. Writing it as `new_product` — the only value left over — would
   relabel the whole catalogue as new on every scan, which is the signal the page exists to show. The
   comparison is against the newest existing row per product, keyed by `sku` when the page publishes
   one and the normalised name otherwise, derived on both sides by `_shared/site.ts`. A product that
   disappears is deliberately *not* reported as `removed`: this is a bounded crawl, not an exhaustive
-  one, so absence proves nothing.
+  one, so absence proves nothing.- `site-scan` settles a source whether or not the read produced anything: `site_scan_at` moves on
+  every read that finished, while `last_scan_at` moves only on one that produced something. That
+  difference is what lets the Suppliers page say **"read cleanly, this site publishes no catalogue"**
+  instead of showing a 0 that is indistinguishable from a scan that never ran — and for the garment
+  factories this app watches, "no catalogue" is the correct permanent answer, not a fault. The page's
+  read states come from those two fields plus the item count and `site_error`; `src/lib/reads.ts` owns
+  the wording.
+- `traffic-scan` and `ads-scan` are the producers behind the traffic panels and the *Active ad
+  campaigns* tile. Both write a **restatement**, not a merge: the metric series
+  (`my_metrics.kind` `traffic` / `channel`, `competitor_metrics.kind` `traffic` /
+  `traffic_source`) has no unique key to upsert against, so the rows of that one kind are
+  replaced wholesale — a merge would leave last month's superseded points behind and the chart
+  would grow a fake history. Only the one `kind` is touched, so the SEO, GEO and review series
+  other scans write are never at risk. `competitor_ads` is restated per competitor for the same
+  reason plus one more: a campaign that has stopped running must stop being counted, which is
+  the whole point of an "active campaigns" figure. An ad's `first_seen_at` is the library's
+  **own** start date, not when we read it, so the history survives the rewrite.
+- The pull runs six workspace-wide scans (search, social, the competitor benchmark, website
+  traffic, competitor advertising — plus the per-source catalogue reads), and they all start at
+  once. That is why `SITE_SCAN_CONCURRENCY` is **2**: each catalogue read and both the social
+  and traffic/ad reads are Apify actor jobs, and the plan this runs on allows five at a time.
+  A sixth job is refused by the account, which surfaces as a source that failed to read rather
+  than as a busy account.
 - A crawl outlives one request, so `site-scan` holds the Apify run id on the source row
   (`suppliers.site_run_id` / `competitors.site_run_id`, migration `0021`) and the next scan
   **collects** that run instead of starting — and paying for — a second one. `last_scan_at` moves only

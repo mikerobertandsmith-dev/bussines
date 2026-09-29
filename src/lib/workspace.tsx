@@ -60,6 +60,9 @@ import {
   type SiteScanResult,
   type SocialAccountsResult,
   type SocialScanResult,
+  type AdsScanResult,
+  type BuyListResult,
+  type TrafficScanResult,
 } from "./integrations";
 import {
   sampleAdAngles,
@@ -336,6 +339,27 @@ export interface WorkspaceActions {
    * the gateway's summary (null in demo mode).
    */
   runSocialScan: () => Promise<SocialScanResult | null>;
+  /**
+   * Measures estimated monthly visits and the channel mix for our own site and
+   * every rival's, one provider run for the lot. This is the only producer of the
+   * traffic panels on Competition and My Business — nothing else writes
+   * `monthly_visits`, the `traffic`/`channel` series or the traffic sources.
+   * Resolves with the gateway's summary (null in demo mode).
+   */
+  runTrafficScan: () => Promise<TrafficScanResult | null>;
+  /**
+   * Reads Meta's Ad Library for every competitor whose Facebook page is saved.
+   * This is the only producer of `competitor_ads`, so it is the only thing that
+   * can make *Active ad campaigns* anything but zero. Resolves with the gateway's
+   * summary (null in demo mode).
+   */
+  runAdsScan: () => Promise<AdsScanResult | null>;
+  /**
+   * Rebuilds the buy list from the competitor catalogue already on file. Calls no
+   * provider, so it is free and safe to run on any pull; the gateway skips what is
+   * already suggested, so pressing it twice adds nothing the second time.
+   */
+  runBuyList: () => Promise<BuyListResult | null>;
   /**
    * Declares a competitor's social handle. The scan scrapes exactly the handles
    * saved here, so this is what gives it a target — there is no other place a
@@ -757,6 +781,21 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
       async runSocialScan() {
         // Sample competitor posts already stand in, and no actor credentials exist
         // in demo mode.
+        return null;
+      },
+      async runTrafficScan() {
+        // Sample traffic already stands in, and no actor credentials exist in demo
+        // mode.
+        return null;
+      },
+      async runAdsScan() {
+        // Sample campaigns already stand in, and no actor credentials exist in demo
+        // mode.
+        return null;
+      },
+      async runBuyList() {
+        // The sample workspace already ships a filled buy list, so there is
+        // nothing to derive in demo mode.
         return null;
       },
       async saveCompetitorSocial(input) {
@@ -1420,6 +1459,45 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           return result ?? null;
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "The search scan could not be run.");
+          throw cause;
+        }
+      },
+      async runTrafficScan() {
+        if (!dbEnabled || !profile) return null;
+        try {
+          const result = await invokeGateway<TrafficScanResult>("traffic-scan", {
+            businessId: profile.id,
+          });
+          await bootstrap({ silent: true });
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The traffic scan could not be run.");
+          throw cause;
+        }
+      },
+      async runBuyList() {
+        if (!dbEnabled || !profile) return null;
+        try {
+          const result = await invokeGateway<BuyListResult>("buy-list", {
+            businessId: profile.id,
+          });
+          await bootstrap({ silent: true });
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The buy list could not be built.");
+          throw cause;
+        }
+      },
+      async runAdsScan() {
+        if (!dbEnabled || !profile) return null;
+        try {
+          const result = await invokeGateway<AdsScanResult>("ads-scan", {
+            businessId: profile.id,
+          });
+          await bootstrap({ silent: true });
+          return result ?? null;
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "The ad scan could not be run.");
           throw cause;
         }
       },

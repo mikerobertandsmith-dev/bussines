@@ -14,9 +14,13 @@ import {
 } from "../_shared/keywords.ts";
 import {
   buildProfileChecks,
+  citationOf,
+  fetchAiOverview,
   findOrganicResult,
   hostnameOf,
+  localResultsOf,
   matchLocalPlace,
+  organicResultsOf,
   serpApi,
   snippetTypeOf,
 } from "../_shared/serpapi.ts";
@@ -40,6 +44,21 @@ import {
  * holds. The My Business health card reads those columns, so without this pass the
  * card would show the figures onboarding wrote rather than anything a scan found.
  * The derivation lives in `_shared/seo.ts`.
+ *
+ * ## GEO — the AI answer, not the link list
+ *
+ * The same Google response that carries the organic results also carries an
+ * `ai_overview` when Google generated one, and that block **is** the AI answer — the
+ * prose and the sources it cited. The body costs a second SerpApi request
+ * (`_shared/serpapi.ts` `fetchAiOverview`), paid for only on terms that actually
+ * have an overview.
+ *
+ * From it we record whether we were cited (named in the prose, or listed as a
+ * source) per term, `my_metrics.kind = 'geo_visibility'` as one point per day, and
+ * `geo_score` on the business row. The My Business GEO tile and the prompts table
+ * read those, which is what makes "AI visibility" a measurement rather than a
+ * blurb. Google AI Overview is one assistant, not all of them: the engine column
+ * says which one answered, and no other assistant is claimed.
  *
  * Deploy with `--no-verify-jwt` — the bearer token is a Clerk token, verified here.
  */
@@ -76,7 +95,7 @@ Deno.serve(async (req) => {
       // The score columns come along so each one's previous value — which is what
       // the card shows movement against — can be carried over on the write below.
       .select(
-        "id, brand_name, primary_domain, country, seo_score, top10_count, avg_position",
+        "id, brand_name, primary_domain, country, seo_score, top10_count, avg_position, geo_score",
       )
       .eq("id", businessId)
       .single();
@@ -110,6 +129,22 @@ Deno.serve(async (req) => {
     const keywords = allKeywords.slice(0, Math.min(requested, affordable));
     const capped = keywords.length < requested;
 
+    // The AI-overview bodies are a second request *each*, and how many terms have an
+    // overview is not knowable before the searches run. So the allowance is computed
+    // from what is left once this run's searches and the Maps lookup are paid for,
+    // and the loop stops reading bodies when it is used up — an overview is the
+    // first thing dropped, because the rankings are the reason the scan exists.
+    const overviewAllowance = Math.max(
+      0,
+      Math.floor(budget.remaining - 1 - keywords.length * devices.length),
+    );
+    /** Bodies actually read — the denominator of the GEO score. */
+    let overviewCalls = 0;
+    /** Body requests made, read or not: these are what the provider bills. */
+    let overviewAttempts = 0;
+    let citedCount = 0;
+    const overviewCapped = { at: false };
+
     const startedAt = new Date().toISOString();
     const checkedAt = startedAt;
 
@@ -136,6 +171,10 @@ Deno.serve(async (req) => {
       priorPackByKey.set(`${row.keyword}|${row.location}`, row as Record<string, unknown>);
     }
 
+    const geoRows: Record<string, unknown>[] = [];
+    /** The engine that answered, named on the row so no other assistant is implied. */
+    const AI_OVERVIEW_ENGINE = "Google AI Overview";
+
     /* ------------------------------------------- Google Business Profile health */
     let healthRow: Record<string, unknown> | null = null;
     const mapsResponse = await serpApi({
@@ -144,7 +183,7 @@ Deno.serve(async (req) => {
       q: `${brandName} ${location}`.trim(),
       hl: "en",
     });
-    const candidates = mapsResponse.local_results ?? [];
+    const candidates = localResultsOf(mapsResponse);
     const place =
       mapsResponse.place_results ??
       candidates.find((entry) => matchLocalPlace(entry, domain, brandName)) ??
@@ -173,6 +212,15 @@ Deno.serve(async (req) => {
     /* --------------------------------------------- organic rank + local 3-pack */
     const rankingRows: Record<string, unknown>[] = [];
     const packRows: Record<string, unknown>[] = [];
+    /**
+     * `local_pack_rankings` holds one row per keyword × location, but the loop below
+     * visits every keyword once per device — and Google returns a pack for more than
+     * one of them. Pushing both would put two rows with the same conflict key in a
+     * single upsert, which Postgres refuses outright ("ON CONFLICT DO UPDATE command
+     * cannot affect row a second time"), failing the whole run. The first device that
+     * answers for a term wins, which with the default order is desktop.
+     */
+    const packKeys = new Set<string>();
 
     for (const keyword of keywords) {
       for (const device of devices) {
@@ -183,9 +231,15 @@ Deno.serve(async (req) => {
           device,
           num: 100,
           hl: "en",
+          // An AI-overview page token cannot be replayed from a cached SERP: the body
+          // request answers "Google hasn't returned any results for this query". The
+          // desktop pass is the one that reads the overview, so it asks for a fresh
+          // result. The mobile pass keeps the default, and the ranks of the two
+          // devices are independent rows anyway.
+          no_cache: device === "desktop" ? true : undefined,
         });
 
-        const match = findOrganicResult(response.organic_results ?? [], domain, brandName);
+        const match = findOrganicResult(organicResultsOf(response), domain, brandName);
         const prior = priorRankingByKey.get(`${keyword}|${device}|${location}`);
         rankingRows.push({
           business_id: businessId,
@@ -203,7 +257,40 @@ Deno.serve(async (req) => {
           checked_at: checkedAt,
         });
 
-        const pack = (response.local_results ?? []).slice(0, 3).map((entry, index) => ({
+        // The AI answer for this term, read once — on the desktop pass — because an
+        // overview belongs to the query rather than to the device we asked from.
+        if (device === "desktop" && response.ai_overview?.page_token) {
+          if (overviewAttempts >= overviewAllowance) {
+            overviewCapped.at = true;
+          } else {
+            overviewAttempts += 1;
+            const overview = await fetchAiOverview(String(response.ai_overview.page_token));
+            // A token Google will not replay is a query we could not read, not a query
+            // that failed to cite us. Counting it as "read, not cited" dragged the
+            // score to zero on terms where we simply never saw the answer.
+            if (overview) {
+              overviewCalls += 1;
+              const citation = citationOf(overview, domain, brandName);
+              if (citation.cited) citedCount += 1;
+              // `sources` rides in `volume`: it is the count of places the answer drew
+              // on, which is what tells a user how hard-won a citation is.
+              geoRows.push({
+                business_id: businessId,
+                keyword,
+                kind: "geo",
+                engine: AI_OVERVIEW_ENGINE,
+                volume: citation.sources,
+                // 0 means "not cited", so any positive value reads as cited and keeps
+                // which source was ours when the answer listed one.
+                position: citation.cited ? citation.position || 1 : 0,
+                change: 0,
+                week_of: checkedAt.slice(0, 10),
+              });
+            }
+          }
+        }
+
+        const pack = localResultsOf(response).slice(0, 3).map((entry, index) => ({
           position: Number(entry.position ?? index + 1),
           name: String(entry.title ?? ""),
           place_id: String(entry.place_id ?? entry.data_id ?? ""),
@@ -211,7 +298,8 @@ Deno.serve(async (req) => {
           reviews: Number(entry.reviews ?? 0),
         }));
 
-        if (pack.length) {
+        if (pack.length && !packKeys.has(`${keyword}|${location}`)) {
+          packKeys.add(`${keyword}|${location}`);
           const ours =
             pack.find((entry) => ourPlaceId && entry.place_id === ourPlaceId) ??
             pack.find((entry) => matchLocalPlace({ title: entry.name }, domain, brandName));
@@ -252,6 +340,63 @@ Deno.serve(async (req) => {
         .from("local_profile_health")
         .upsert(healthRow, { onConflict: "business_id,place_id" });
       if (error) throw new HttpError(500, error.message);
+
+      // Exactly one profile is *our* profile. The Maps query can answer with a
+      // different listing of the same name from run to run, and keying the upsert by
+      // place id then leaves a row per listing — so the card showed whichever one the
+      // loader happened to pick, and "in the map 3-pack" was decided against a
+      // listing that changed under it. This run's match is the current answer, so the
+      // others are removed rather than left to compete with it.
+      const { error: staleError } = await db
+        .from("local_profile_health")
+        .delete()
+        .eq("business_id", businessId)
+        .neq("place_id", ourPlaceId);
+      if (staleError) throw new HttpError(500, staleError.message);
+    }
+
+    /* ------------------------------------------------------------ GEO visibility */
+    // `my_keywords` has no unique key to upsert on, so this is insert-then-prune: the
+    // rows written by this run carry a `created_at` at or after the moment it started,
+    // so pruning below that timestamp removes only the rows it is replacing — and
+    // scoping by `kind` keeps a re-scan from touching the tracked SEO terms. Clearing
+    // first instead would leave the panel empty if the insert then failed.
+    if (geoRows.length) {
+      const { error } = await db.from("my_keywords").insert(geoRows);
+      if (error) throw new HttpError(500, error.message);
+
+      const { error: pruneError } = await db
+        .from("my_keywords")
+        .delete()
+        .eq("business_id", businessId)
+        .eq("kind", "geo")
+        .lt("created_at", startedAt);
+      if (pruneError) throw new HttpError(500, pruneError.message);
+    }
+
+    // One point per day, replaced rather than stacked: re-running the scan is the
+    // normal way to fix a bad reading, and a second point for the same day would
+    // draw a spike that never happened.
+    const geoScore = overviewCalls ? Math.round((citedCount / overviewCalls) * 100) : 0;
+    if (overviewCalls) {
+      const day = checkedAt.slice(0, 10);
+      const { error } = await db.from("my_metrics").insert({
+        business_id: businessId,
+        kind: "geo_visibility",
+        label: day,
+        value: geoScore,
+        sort_order: Math.floor(Date.parse(`${day}T00:00:00Z`) / 86_400_000),
+      });
+      if (error) throw new HttpError(500, error.message);
+
+      const { error: metricPruneError } = await db
+        .from("my_metrics")
+        .delete()
+        .eq("business_id", businessId)
+        .eq("kind", "geo_visibility")
+        .eq("label", day)
+        .lt("created_at", startedAt);
+      if (metricPruneError) throw new HttpError(500, metricPruneError.message);
     }
 
     /* ------------------------------------------------- search visibility scores */
@@ -271,21 +416,27 @@ Deno.serve(async (req) => {
     // Nothing scanned yet — leave the row alone rather than overwriting an
     // onboarding figure with a blank one.
     if (summary.terms) {
-      const { error } = await db
-        .from("businesses")
-        .update({
-          previous_seo_score: business.seo_score ?? null,
-          seo_score: summary.seoScore,
-          previous_top10_count: business.top10_count ?? null,
-          top10_count: summary.top10Count,
-          ranked_count: summary.rankedCount,
-          previous_avg_position: business.avg_position ?? null,
-          // Null, not 0, when we appear for nothing: the card shows a dash, and a
-          // stored zero would read as "position zero".
-          avg_position: summary.avgPosition || null,
-          rankings_checked_at: checkedAt,
-        })
-        .eq("id", businessId);
+      const patch: Record<string, unknown> = {
+        previous_seo_score: business.seo_score ?? null,
+        seo_score: summary.seoScore,
+        previous_top10_count: business.top10_count ?? null,
+        top10_count: summary.top10Count,
+        ranked_count: summary.rankedCount,
+        previous_avg_position: business.avg_position ?? null,
+        // Null, not 0, when we appear for nothing: the card shows a dash, and a
+        // stored zero would read as "position zero".
+        avg_position: summary.avgPosition || null,
+        rankings_checked_at: checkedAt,
+      };
+
+      // Only when Google actually answered with an overview. Writing 0 here would
+      // report "cited nowhere" for a run that found no AI answer to be cited in.
+      if (overviewCalls) {
+        patch.previous_geo_score = business.geo_score ?? null;
+        patch.geo_score = geoScore;
+      }
+
+      const { error } = await db.from("businesses").update(patch).eq("id", businessId);
       if (error) throw new HttpError(500, error.message);
     }
 
@@ -294,7 +445,7 @@ Deno.serve(async (req) => {
       source_type: "seo",
       source_name: "Google search & local scan",
       status: "succeeded",
-      changes_found: rankingRows.length + packRows.length,
+      changes_found: rankingRows.length + packRows.length + geoRows.length,
       started_at: startedAt,
       finished_at: new Date().toISOString(),
     });
@@ -315,12 +466,30 @@ Deno.serve(async (req) => {
         detail: "Business profile health",
       });
     }
+    if (overviewAttempts) {
+      await recordUsage(db, {
+        businessId,
+        provider: "serpapi",
+        endpoint: "google_ai_overview",
+        units: overviewAttempts,
+        detail: `${overviewAttempts} AI overview bodies requested · ${overviewCalls} read · ${citedCount} cited us`,
+      });
+    }
 
     return json({
       keywords: keywords.length,
       rankings: rankingRows.length,
       packKeywords: packRows.length,
       placeId: ourPlaceId,
+      /** GEO: the AI-overview pass, and what it found. */
+      geo: {
+        overviewsRead: overviewCalls,
+        overviewsRequested: overviewAttempts,
+        cited: citedCount,
+        score: overviewCalls ? geoScore : null,
+        /** True when the monthly budget stopped the overview reads early. */
+        capped: overviewCapped.at,
+      },
       /** The search visibility written onto the business row, for the caller. */
       search: {
         seoScore: summary.seoScore,

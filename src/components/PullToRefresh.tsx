@@ -13,9 +13,28 @@ const MAX_DISTANCE = 96;
 const DRAG_RESISTANCE = 0.6;
 /** How long the "already current" check plays before it says so. */
 const CURRENT_CHECK_MS = 900;
+/**
+ * How much of a failure reason the toast repeats. The gateway's messages are
+ * already written to be read, but a toast is one line and must stay one.
+ */
+const REASON_LIMIT = 160;
 
 /** A control is not a pull handle: dragging out of one is a selection, not a gesture. */
 const INTERACTIVE = "input, textarea, select, button, a";
+
+/**
+ * The first failure, in one line, so a toast that says "3 failed" is not the whole
+ * story — the gateway's message names the missing setting, the empty keyword list,
+ * or the budget that stopped it.
+ */
+function why(outcome: { error?: string }): string {
+  if (!outcome.error) return "";
+  const reason =
+    outcome.error.length > REASON_LIMIT
+      ? `${outcome.error.slice(0, REASON_LIMIT - 1)}…`
+      : outcome.error;
+  return ` — ${reason}`;
+}
 
 /**
  * Drag-down refresh for the pages that share one workspace.
@@ -34,7 +53,7 @@ export function PullToRefresh({ children }: { children: ReactNode }) {
   const startY = useRef<number | null>(null);
   const timer = useRef<number | null>(null);
   const [distance, setDistance] = useState(0);
-  /** Inside the hour: the check is playing, so the bar stays up until it reports. */
+  /** Inside the window: the check is playing, so the bar stays up until it reports. */
   const [checking, setChecking] = useState(false);
 
   const busy = refreshing || checking;
@@ -48,7 +67,7 @@ export function PullToRefresh({ children }: { children: ReactNode }) {
     try {
       const outcome = await pull();
       if (outcome.status === "capped") {
-        // Inside the hour. Play the check, then say the workspace is already
+        // Inside the window. Play the check, then say the workspace is already
         // current rather than implying a scan ran.
         setChecking(true);
         if (timer.current !== null) window.clearTimeout(timer.current);
@@ -58,7 +77,18 @@ export function PullToRefresh({ children }: { children: ReactNode }) {
         }, CURRENT_CHECK_MS);
         return;
       }
-      if (outcome.status === "refreshed") {
+      if (outcome.status === "refreshed" && outcome.mode === "collect") {
+        // Inside the window with output waiting. Nothing was started, so the sweep's
+        // wording would read as "0 of 0 live scans ran" — what happened is that paid
+        // crawls were read back.
+        const bits = [
+          `${outcome.site.ran} of ${outcome.site.attempted} waiting catalogue reads collected`,
+        ];
+        if (outcome.running) bits.push(`${outcome.running} still running`);
+        if (outcome.failed) bits.push(`${outcome.failed} failed`);
+        toast(`Collected — ${bits.join(" · ")}${why(outcome)}.`);
+      }
+      if (outcome.status === "refreshed" && outcome.mode === "sweep") {
         // Reported in two halves because they are two different things: three
         // workspace-wide scans, and one catalogue read per watched site. A crawl
         // that outlived the wait is called out on its own — its money is already
@@ -70,7 +100,7 @@ export function PullToRefresh({ children }: { children: ReactNode }) {
         ];
         if (outcome.running) bits.push(`${outcome.running} still running`);
         if (outcome.failed) bits.push(`${outcome.failed} failed`);
-        toast(`Refreshed — ${bits.join(" · ")}.`);
+        toast(`Refreshed — ${bits.join(" · ")}${why(outcome)}.`);
       }
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : "The workspace could not be refreshed.");

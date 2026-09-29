@@ -10,6 +10,8 @@ import {
   siteActorHint,
   siteActorId,
   siteCaps,
+  siteInputFor,
+  sourceSettlement,
   stockStateOf,
 } from "../supabase/functions/_shared/site";
 
@@ -182,30 +184,35 @@ describe("site catalogue assembly", () => {
 });
 
 describe("site actor configuration", () => {
-  it("reads the website actor already configured, and prefers its own slot when set", () => {
+  it("prefers the catalogue actor, and falls back when it is unset", () => {
     // No website reader on the deployment at all: reported as unconfigured rather
     // than guessed at, and the hint names what would switch it on.
     expect(siteActorId()).toBe("");
     expect(siteActorHint()).toContain("APIFY_SITE_ACTOR_ID");
     expect(siteActorHint()).toContain("APIFY_CONTACTS_ACTOR_ID");
 
-    // The crawler the deployment already has is enough to read a supplier's or a
-    // competitor's site — no secret of its own is required.
+    // The fallback resolves *an id*, not a working catalogue read: this crawler
+    // returns contact details and no product rows, so while `APIFY_SITE_ACTOR_ID`
+    // stays unset the catalogue is empty however many times it runs. The fallback
+    // exists so "misconfigured" is distinguishable from "no reader at all".
     denoEnv.set("APIFY_CONTACTS_ACTOR_ID", "9Sk4JJhEma9vBKqrg");
     expect(siteActorId()).toBe("9Sk4JJhEma9vBKqrg");
 
-    // A catalogue-specific actor takes over when one is configured, for both
-    // pages: the choice is per deployment, not per target.
+    // The catalogue actor takes over when one is configured, for both pages: the
+    // choice is per deployment, not per target.
     denoEnv.set("APIFY_SITE_ACTOR_ID", "owner~catalogue-actor");
     expect(siteActorId()).toBe("owner~catalogue-actor");
   });
 
   it("caps a read, with defaults that a deployment can override", () => {
+    // The defaults are a *price*, not just a breadth: this actor bills per product
+    // returned, and 200 items cost $1.00 — the cap, hit exactly — which spent the
+    // account's whole monthly allowance in four reads.
     expect(siteCaps()).toEqual({
       maxPages: 25,
-      maxChargeUsd: 1,
+      maxChargeUsd: 0.3,
       timeoutSecs: 120,
-      maxItems: 200,
+      maxItems: 60,
     });
 
     denoEnv.set("APIFY_SITE_MAX_PAGES", "50");
@@ -216,7 +223,41 @@ describe("site actor configuration", () => {
     expect(caps.maxChargeUsd).toBe(2.5);
     // A non-positive ceiling is not a ceiling, so the default stands rather than
     // reading as "keep nothing".
-    expect(caps.maxItems).toBe(200);
+    expect(caps.maxItems).toBe(60);
+  });
+
+  it("sends the input that makes a catalogue actor read the catalogue", () => {
+    const caps = { maxPages: 25, maxChargeUsd: 1, timeoutSecs: 120, maxItems: 200 };
+
+    // Two contracts in one payload: a product-catalogue actor needs
+    // `discoverProducts` to treat the start URL as a storefront, and the generic
+    // website crawler needs the page and depth names it knows. Each actor drops
+    // the keys it does not use rather than refusing the run.
+    expect(siteInputFor("https://supplier.com", caps)).toEqual({
+      startUrls: [{ url: "https://supplier.com" }],
+      // Without this the actor reads the home page as though it were a single
+      // product page and returns its <title> as a product name — which
+      // `normaliseProduct` accepts, so the junk would be stored and re-reported
+      // as a new product on every scan.
+      discoverProducts: true,
+      maxProducts: 200,
+      // The quality gate: without it a storefront's blog and category pages arrive
+      // as "products" (a title, no price) and normaliseProduct stores them.
+      minCompleteness: 50,
+      maxCrawlPages: 25,
+      maxCrawlDepth: 2,
+      maxRequests: 25,
+      maxRequestsPerStartUrl: 25,
+      maxDepth: 2,
+      sameDomain: true,
+      proxyConfig: { useApifyProxy: true },
+      useBrowser: false,
+    });
+
+    // The product ceiling is the source's own cap, not a second hard-coded number.
+    expect(siteInputFor("https://supplier.com", { ...caps, maxItems: 7 })).toMatchObject({
+      maxProducts: 7,
+    });
   });
 
   it("reduces a stored website to the origin a crawler can start from", () => {
@@ -237,5 +278,65 @@ describe("site scan scheduling", () => {
     expect(nextScanAt("daily", from).slice(0, 10)).toBe("2026-02-01");
     expect(nextScanAt("weekly", from).slice(0, 10)).toBe("2026-02-07");
     expect(nextScanAt("monthly", from).slice(0, 10)).toBe("2026-03-02");
+  });
+});
+
+describe("settling a source after a catalogue read", () => {
+  const collectedAt = "2026-09-29T05:15:51.013Z";
+
+  it("never asks a competitor for the supplier-only columns", () => {
+    // The update that settles the row is also the one that clears `site_run_id`,
+    // records the run and logs the cost, and it runs *after* the items are
+    // written. Naming a column `competitors` does not have makes PostgREST reject
+    // the whole update — `could not find the 'next_scan_at' column of
+    // 'competitors' in the schema cache` — so a competitor whose catalogue read
+    // perfectly well ends up with its products stored, its run uncollected, its
+    // spend unlogged and a retry on every later pull.
+    const patch = sourceSettlement({
+      target: "competitor",
+      ok: true,
+      cadence: "daily",
+      collectedAt,
+    });
+
+    expect(patch).not.toHaveProperty("next_scan_at");
+    expect(patch).not.toHaveProperty("lead_time_days");
+    expect(patch).toEqual({
+      site_run_id: null,
+      site_scan_at: collectedAt,
+      site_error: null,
+      last_scan_at: collectedAt,
+    });
+  });
+
+  it("schedules a supplier from its cadence, off the collection time", () => {
+    const patch = sourceSettlement({
+      target: "supplier",
+      ok: true,
+      cadence: "weekly",
+      collectedAt,
+    });
+
+    expect(patch.next_scan_at).toBe(nextScanAt("weekly", new Date(collectedAt)));
+    expect(String(patch.next_scan_at).slice(0, 10)).toBe("2026-10-06");
+  });
+
+  it("clears the claim and records why, without moving any dates, on a read that found nothing", () => {
+    const patch = sourceSettlement({
+      target: "competitor",
+      ok: false,
+      cadence: "daily",
+      collectedAt,
+      error: "The site read did not finish cleanly: TIMED-OUT",
+    });
+
+    // Clearing `site_run_id` is what stops the source waiting on a finished crawl
+    // for ever, so it happens on a failed read too — and the dates stay put, so a
+    // failed scan cannot make the page claim a fresh read.
+    expect(patch).toEqual({
+      site_run_id: null,
+      site_scan_at: collectedAt,
+      site_error: "The site read did not finish cleanly: TIMED-OUT",
+    });
   });
 });

@@ -454,6 +454,28 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     };
   });
 
+  /**
+   * Where our measured traffic sits against the rivals we measure.
+   *
+   * Derived here, at load, rather than read from `businesses.industry_rank` — that
+   * column has no writer, so the My Business tile rendered an em dash beside a
+   * hint claiming movement "in your industry", which is the worst of both. The one
+   * comparison the data actually supports is against the tracked set: we hold a
+   * measured monthly figure for our own site and for each rival, from the same
+   * provider run, so the ranking is a real ordering of comparable estimates. It is
+   * *not* an industry-wide rank, and the tile says "of the ones you track".
+   *
+   * Competitors with no measured traffic are left out of the ordering rather than
+   * counted as zero: an unmeasured rival is not a smaller rival.
+   */
+  const visitCounts = competitorRows
+    .map((c) => num((c as Row).monthly_visits))
+    .filter((visits) => visits > 0);
+  const industryRank =
+    profile.monthlyVisits > 0
+      ? 1 + visitCounts.filter((visits) => visits > profile.monthlyVisits).length
+      : 0;
+
   const metrics: BusinessMetrics = {
     ...EMPTY_METRICS,
     seoScore: profile.seoScore,
@@ -463,8 +485,11 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     domainAuthority: profile.domainAuthority,
     indexedPages: profile.indexedPages,
     backlinks: profile.backlinks,
-    industryRank: profile.industryRank,
-    industryRankPrevious: profile.industryRankPrevious,
+    industryRank,
+    // The ranking is recomputed from the figures on every load, so there is no
+    // stored previous to compare against unless one was written by hand; saying
+    // "no change" is the truthful default rather than inventing a movement.
+    industryRankPrevious: profile.industryRankPrevious || industryRank,
     monthlyVisits: profile.monthlyVisits,
     visitsChange: profile.visitsChange,
     conversionRate: profile.conversionRate,
@@ -626,9 +651,11 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         prompt: str(k.keyword),
         engine: str(k.engine),
         position: num(k.position),
-        change: num(k.change),
+        // Written into `volume` by `serp-scan`: the column is generic on purpose, so
+        // adding a metric does not need a migration.
+        sources: num(k.volume),
       }))
-      .sort((a, b) => a.position - b.position),
+      .sort((a, b) => b.position - a.position),
     serpRankings,
     localPackRankings,
     localProfileHealth,
@@ -1799,6 +1826,10 @@ function mapCompetitorBase(row: Row): Competitor {
     // that is still going rather than starting a second one.
     contactsStatus: str(row.contacts_status) || undefined,
     contactsScannedAt: str(row.contacts_scanned_at) || undefined,
+    // A run id still on the row is a catalogue crawl that has been billed and not
+    // read back yet. The pull needs to see it to collect it inside the pull cap,
+    // so it is mapped here rather than left to `select("*")`.
+    siteScanPending: Boolean(row.site_run_id),
     traffic: [],
     reviewTrend: [],
     trafficSources: [],
@@ -1825,6 +1856,13 @@ function mapSupplierRow(row: Row): Supplier {
     accountManager: str(row.account_manager),
     leadTimeDays: num(row.lead_time_days),
     notes: str(row.notes) || undefined,
+    // See `mapCompetitorBase`: an uncollected run id on the row.
+    siteScanPending: Boolean(row.site_run_id),
+    // The attempt, kept apart from `lastScan` (which only moves on a read that
+    // produced something) so the page can say "read, nothing published" rather
+    // than showing a 0 with no reason and looking like a dead scan.
+    siteScanAt: str(row.site_scan_at) || undefined,
+    siteError: str(row.site_error) || undefined,
   };
 }
 

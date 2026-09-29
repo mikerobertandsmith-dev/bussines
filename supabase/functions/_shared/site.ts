@@ -12,16 +12,23 @@ import { getEnv } from "./env.ts";
  *
  * ## The contract an actor has to meet
  *
- * No new secret is needed to read a watched business's site. A supplier and a
- * competitor are the same thing to this scan — a business with a website — so the
- * read uses the website actor the deployment already has, `APIFY_CONTACTS_ACTOR_ID`
- * (the crawler behind the competitor "find their socials" flow). `APIFY_SITE_ACTOR_ID`
- * is an optional dedicated slot: set it once and both pages use it instead, which is
- * how a catalogue-specific actor would be introduced later without a release.
+ * A **product-catalogue actor is required**: `APIFY_SITE_ACTOR_ID`. A supplier and
+ * a competitor are the same thing to this scan — a business with a website — so one
+ * configured id serves both pages, but only an actor that actually publishes
+ * products can serve them. The id is **configuration**, never a constant, so a
+ * different catalogue actor is a secret change rather than a release.
  *
- * The id is **configuration**, never a constant, and blank means "this deployment
- * has no website actor at all": the feature reports itself unavailable rather than
- * guessing at an actor and paying for a run that returns nothing.
+ * It is **not** interchangeable with `APIFY_CONTACTS_ACTOR_ID`, the crawler behind
+ * the competitor "find their socials" flow. That actor returns contact details —
+ * emails, phones, social handles — with no product rows and no page HTML/JSON-LD,
+ * the two shapes the normalising below reads. Measured on the live project,
+ * catalogue reads through it start, bill and report "succeeded" with 0 changes every
+ * time while writing nothing: a silent empty catalogue, not a working default. See
+ * `siteActorId()` for why the fallback is still resolved at all.
+ *
+ * Blank means "this deployment has no website actor at all": the feature reports
+ * itself unavailable rather than guessing at an actor and paying for a run that
+ * returns nothing.
  *
  * Whichever actor is configured must return **either** shape, and this module
  * reads both because the second is a public standard rather than a vendor's field
@@ -56,12 +63,16 @@ export const SITE_ACTOR_ENV_KEYS = ["APIFY_SITE_ACTOR_ID", "APIFY_CONTACTS_ACTOR
 /**
  * The actor id a site read runs, or "" when this deployment has no website actor.
  *
- * `APIFY_SITE_ACTOR_ID` wins when it is set — one name for both pages, because a
- * supplier's wholesale list and a rival's shopfront are read the same way. Unset,
- * the read falls back to `APIFY_CONTACTS_ACTOR_ID`, the website crawler already
- * configured for competitor discovery: the two features read the same page for
- * different answers, so one id covers both rather than demanding a second secret
- * to read a site the app can already read.
+ * `APIFY_SITE_ACTOR_ID` wins when it is set, and is the one that matters — one name
+ * for both pages, because a supplier's wholesale list and a rival's shopfront are
+ * read the same way. It is a requirement rather than an override; the fallback below
+ * cannot read a catalogue at all (see the module note above).
+ *
+ * The fallback to `APIFY_CONTACTS_ACTOR_ID` is kept so that a deployment with no
+ * catalogue actor still resolves to *an* id, which is what lets the Integrations
+ * panel and `siteActorHint()` tell "misconfigured" apart from "no website reader at
+ * all". It is not kept because that actor can read a catalogue: treat an unset
+ * `APIFY_SITE_ACTOR_ID` as a deployment that cannot read catalogues yet.
  *
  * Empty means "this deployment cannot read a website at all", and the caller
  * reports that state instead of running: an unverified actor id is worse than a
@@ -71,11 +82,21 @@ export function siteActorId(): string {
   return getEnv(SITE_ACTOR_ENV_KEYS[0]) || getEnv(SITE_ACTOR_ENV_KEYS[1]) || "";
 }
 
-/** A message naming the variables that switch the site read on. */
+/**
+ * A message naming the variable that switches the site read on.
+ *
+ * It names the catalogue slot first and says plainly what the other one is, rather
+ * than offering `APIFY_CONTACTS_ACTOR_ID` as an alternative. Offering it would be
+ * advice that cannot work — it returns no products — and whoever reads this message
+ * is usually someone looking at an empty catalogue with no error explaining it,
+ * which is the state this hint exists to name.
+ */
 export function siteActorHint(): string {
   return (
-    `Set ${SITE_ACTOR_ENV_KEYS[0]} to a product-catalogue actor, or ` +
-    `${SITE_ACTOR_ENV_KEYS[1]} to the website reader this deployment already uses.`
+    `Set ${SITE_ACTOR_ENV_KEYS[0]} to a product-catalogue actor that returns ` +
+    `product rows or schema.org JSON-LD. ${SITE_ACTOR_ENV_KEYS[1]} is the crawler ` +
+    `behind competitor discovery and reads contact details only, so it cannot fill ` +
+    `a catalogue.`
   );
 }
 
@@ -107,12 +128,30 @@ export interface SiteCaps {
  * `max-total-charge-usd-below-minimum` — a refusal, not a tighter cap. Raise
  * `APIFY_SITE_MAX_CHARGE_USD` above the configured actor's floor.
  */
+/**
+ * Defaults, sized against what a read actually costs rather than what it could
+ * usefully see.
+ *
+ * The actor bills **per product returned**, so `maxItems` is the price of a read,
+ * not just its breadth. At 200 items a single Cotopaxi read cost **$1.00** — its
+ * own `maxTotalChargeUsd` ceiling, hit exactly — and four of them in one day spent
+ * the whole $5 monthly allowance, after which Apify refused *every* run on the
+ * account and six separate panels (supplier catalogues, competitor inventory,
+ * social, traffic, advertising) looked independently broken. Sixty items is about
+ * $0.30, and only a source that publishes a readable catalogue pays anything at
+ * all: of twelve watched sources, one does.
+ *
+ * The trade is honest: a catalogue longer than the cap is read from the top, so a
+ * change below the cut is missed until something above it moves. That is the right
+ * way round for a change feed — the newest listings are what "what changed on their
+ * site" is for — but it is a ceiling someone can raise deliberately.
+ */
 export function siteCaps(): SiteCaps {
   return {
     maxPages: Math.round(positiveEnv("APIFY_SITE_MAX_PAGES", 25)),
-    maxChargeUsd: positiveEnv("APIFY_SITE_MAX_CHARGE_USD", 1),
+    maxChargeUsd: positiveEnv("APIFY_SITE_MAX_CHARGE_USD", 0.3),
     timeoutSecs: Math.round(positiveEnv("APIFY_SITE_RUN_TIMEOUT_SECS", 120)),
-    maxItems: Math.round(positiveEnv("APIFY_SITE_MAX_ITEMS", 200)),
+    maxItems: Math.round(positiveEnv("APIFY_SITE_MAX_ITEMS", 60)),
   };
 }
 
@@ -136,20 +175,52 @@ export function catalogueUrl(value: string): string {
 /**
  * The actor input for one website.
  *
- * Kept to keys that a page crawler and a shopfront actor both accept:
- * `startUrls` is the only universal one, and the page ceiling is expressed three
- * ways (`maxCrawlPages`, `maxRequests`, `maxRequestsPerStartUrl`) because actors
- * disagree on the name and an unrecognised key is silently ignored — which is a
- * run that costs money and stops nowhere. `sameDomain` keeps a supplier's links
- * to its own social sites from being crawled as catalogue pages.
+ * Two actor contracts sit behind the one configured id — a product-catalogue
+ * actor in the `APIFY_SITE_ACTOR_ID` slot, or the generic website crawler the
+ * deployment already runs — so the input carries both sets of keys and each actor
+ * ignores the ones it does not know. An unrecognised key is silently dropped,
+ * which is a run that costs money and stops nowhere.
  *
- * Product *detail* pages are the point, so the crawl follows links rather than
- * stopping at the home page; that is what `maxDepth` is for.
+ * `discoverProducts` is what makes this a *catalogue* read instead of a one-page
+ * read: it tells a product actor to treat the start URL as a storefront and find
+ * its product pages from robots.txt and the sitemaps it declares. `maxProducts`
+ * is how many it may fetch. Omitting `discoverProducts` is not a harmless
+ * narrowing — the actor then reads the home page as though it *were* a product
+ * page and returns its `<title>` as the product name. `normaliseProduct` accepts
+ * that, because all it requires is a name, so the junk would be stored and then
+ * re-reported as a new product on every scan.
+ *
+ * The page ceiling is expressed three ways (`maxCrawlPages`, `maxRequests`,
+ * `maxRequestsPerStartUrl`) and the depth two (`maxCrawlDepth`, `maxDepth`)
+ * because actors disagree on the name. `sameDomain` keeps a supplier's links to
+ * its own social sites from being crawled as catalogue pages.
+ *
+ * Product *detail* pages are the point in both contracts, so the crawl follows
+ * links rather than stopping at the home page.
  */
 export function siteInputFor(url: string, caps: SiteCaps): Record<string, unknown> {
   return {
     startUrls: [{ url }],
+    // The catalogue actor: crawl the storefront, not the page we were handed.
+    discoverProducts: true,
+    maxProducts: caps.maxItems,
+    // The actor's own quality gate, as a percentage of seven scored fields (name,
+    // brand, identifier, price, currency, availability, image). Rows below it are
+    // dropped by the actor and never charged for.
+    //
+    // It is not optional. A storefront's sitemap also lists blog posts and category
+    // pages, and the actor will happily return their OpenGraph title as the product
+    // *name* — measured from arcteryx.com and thenorthface.com at 29% complete, e.g.
+    // "Men's Outdoor Gifts Under $100 | Arc'teryx" and "10 of the best European
+    // skiing destination". `normaliseProduct` requires only a name and a price it
+    // reads as 0 when it cannot parse one, so without this gate those would be
+    // stored as products, double-counted in every localisation of the page, and
+    // re-reported as new products on every scan. 50 is the actor's own suggested
+    // default; genuine product rows from cotopaxi.com and sephora.com scored 100%.
+    minCompleteness: 50,
+    // The generic crawler: the same reach, under the names it uses.
     maxCrawlPages: caps.maxPages,
+    maxCrawlDepth: 2,
     maxRequests: caps.maxPages,
     maxRequestsPerStartUrl: caps.maxPages,
     maxDepth: 2,
@@ -272,6 +343,50 @@ export function nextScanAt(cadence: string, from: Date = new Date()): string {
   return next.toISOString();
 }
 
+/**
+ * What a settled catalogue read writes back to **its own** source row.
+ *
+ * `suppliers` and `competitors` are not the same shape, and PostgREST rejects an
+ * update that names a column its table does not have — in the failure that
+ * prompted this helper, `could not find the 'next_scan_at' column of
+ * 'competitors' in the schema cache`. That is not a cosmetic error here. This
+ * update is the only thing that clears `site_run_id`, records the run in
+ * `scan_runs` and logs the cost, and it runs *after* the items are written — so a
+ * competitor read that filled a whole catalogue still failed at the last step:
+ * the products landed, the source went on looking "in flight" for ever, the Apify
+ * spend never reached `api_usage_log`, and every later pull retried it.
+ *
+ * `next_scan_at` is a supplier column, exactly like `lead_time_days`, which
+ * `loadSource` already asks for only for a supplier.
+ */
+export function sourceSettlement(input: {
+  target: SiteTarget;
+  /** True when the read produced something usable; a failed read moves no dates. */
+  ok: boolean;
+  cadence: string;
+  /** When the read settled, also the base for the next due date. */
+  collectedAt: string;
+  /** The failure to record, already worded and truncated by the caller. */
+  error?: string;
+}): Record<string, unknown> {
+  return {
+    site_run_id: null,
+    site_scan_at: input.collectedAt,
+    site_error: input.ok ? null : (input.error ?? null),
+    // `last_scan_at` moves only on a read that produced something, so a failed
+    // scan cannot make the page claim a fresh scan; `site_scan_at` records the
+    // attempt either way.
+    ...(input.ok
+      ? {
+          last_scan_at: input.collectedAt,
+          ...(input.target === "supplier"
+            ? { next_scan_at: nextScanAt(input.cadence, new Date(input.collectedAt)) }
+            : {}),
+        }
+      : {}),
+  };
+}
+
 /** An array, from an array or a single object. */
 function asArray(value: unknown): Record<string, unknown>[] {
   if (Array.isArray(value)) {
@@ -317,6 +432,55 @@ function nestedProducts(item: Record<string, unknown>): Record<string, unknown>[
  * is a list of things to buy, and a nameless row is noise that would also corrupt
  * change detection by keying on "".
  */
+/**
+ * HTML entities back to characters.
+ *
+ * Storefronts publish names with the entities their templates emit, and the actor
+ * hands them on untouched: a live Cotopaxi read stored "Do Good T-Shirt - Men&#39;s".
+ * The page then shows the entity, and — worse — a name carrying it does not match
+ * the same product's plain spelling, so a real change can read as a new product.
+ * Only the handful of entities a product name actually uses are handled; an unknown
+ * one is left alone rather than guessed at.
+ */
+export function decodeEntities(value: string): string {
+  return String(value ?? "")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(
+      /&(amp|lt|gt|quot|apos|nbsp|#39|#8217|#8216|#8220|#8221|aacute|eacute|iacute|oacute|uacute|ntilde|uuml|ouml|auml|ccedil);/g,
+      (match, name: string) => {
+        const named: Record<string, string> = {
+          amp: "&",
+          lt: "<",
+          gt: ">",
+          quot: '"',
+          apos: "'",
+          nbsp: " ",
+          "#39": "'",
+          "#8217": "’",
+          "#8216": "‘",
+          "#8220": "“",
+          "#8221": "”",
+          // The few accented letters a product name actually reaches for — "Del
+          // Día" is on a real Cotopaxi listing, and its accented and entity
+          // spellings have to reduce to the same key or the same product reads as
+          // two.
+          aacute: "á",
+          eacute: "é",
+          iacute: "í",
+          oacute: "ó",
+          uacute: "ú",
+          ntilde: "ñ",
+          uuml: "ü",
+          ouml: "ö",
+          auml: "ä",
+          ccedil: "ç",
+        };
+        return named[name] ?? match;
+      },
+    );
+}
+
 export function normaliseProduct(raw: Record<string, unknown>): ScrapedProduct | null {
   const offer = offerOf(raw);
   const product = firstString(
@@ -346,7 +510,7 @@ export function normaliseProduct(raw: Record<string, unknown>): ScrapedProduct |
 
   return {
     key: catalogueKey(sku, product),
-    product: product.slice(0, 300),
+    product: decodeEntities(product).slice(0, 300),
     sku: sku.slice(0, 120),
     category: firstString(raw.category, raw.productType, raw.categoryName).slice(0, 120),
     price,

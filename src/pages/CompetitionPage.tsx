@@ -308,6 +308,17 @@ export function CompetitionPage() {
   }
 
   const activeAds = competitor.ads.filter((a) => a.status === "active").length;
+  /**
+   * Whether their ad library can be read at all.
+   *
+   * The library resolves an advertiser by Facebook page and not by name, so
+   * without one saved there is nothing to read and a count of 0 would mean "we
+   * have not looked", not "they are not advertising" — the two must not share a
+   * tile. Their page is saved on this page's own Social tab.
+   */
+  const facebookPage = competitor.social.find((channel) =>
+    channel.platform.toLowerCase().startsWith("facebook"),
+  );
   const negativeReviews = competitor.reviews.filter((r) => r.sentiment === "negative").length;
   const mySocial = myBusiness.trafficSources.find((s) => /social|instagram|paid/i.test(s.label));
   const theirSocial = competitor.trafficSources.find((s) =>
@@ -636,11 +647,20 @@ export function CompetitionPage() {
           },
           {
             name: "Active ad campaigns",
-            stat: activeAds,
-            meta: competitor.adPlatforms.join(", ") || "no platforms reported",
+            // An em dash, not a zero, when their page is not on file: the number
+            // is unknown rather than absent.
+            stat: facebookPage ? activeAds : "—",
+            // Where the campaigns actually run, read from the campaigns we
+            // collected — the competitor row's own `ad_platforms` is setup input
+            // and stays empty for a rival added without it.
+            meta: facebookPage
+              ? [...new Set(competitor.ads.map((ad) => ad.platform))].join(", ") ||
+                competitor.adPlatforms.join(", ") ||
+                "no live campaigns in the ad library"
+              : "add their Facebook page on the Social tab to read their ads",
             progressLabel: "Campaign feed coverage",
             progress: activeAds / 8,
-            status: activeAds > 0 ? "observe" : "within",
+            status: facebookPage && activeAds > 0 ? "observe" : "within",
           },
           {
             name: "Rating (2 months)",

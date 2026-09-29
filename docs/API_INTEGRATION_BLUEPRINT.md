@@ -76,10 +76,12 @@ Clerk JWT); the gateway calls the provider with the secret key and writes result
 | Function | Provider | Trigger | Writes |
 | --- | --- | --- | --- |
 | `serp-scan` | SerpApi | cron + the shared pull-to-refresh | `serp_rankings`, `local_pack_rankings`, `local_profile_health`, and the workspace's **search visibility** back onto `businesses` (`seo_score`, `top10_count`, `ranked_count`, `avg_position`, each with its `previous_*` twin, plus `rankings_checked_at`) — derived from the standings it just stored, by `_shared/seo.ts`, so the My Business health card cannot show an onboarding figure as a scan result |
-| `serp-competitors` | SerpApi | cron + "Run benchmark" (Competition → Local) | `competitor_share_of_voice`, `competitor_review_gap` |
+| `serp-competitors` | SerpApi | cron + "Run benchmark" (Competition → Local) | `competitor_share_of_voice`, `competitor_review_gap`, `competitor_keywords`, `competitor_metrics` (one review-trend point per competitor per month), and the competitor's own `rating` / `previous_rating` / `review_count` / `reviews_this_month` / `last_scan_at` — the Maps lookup already returns those figures, and the Competition panels read them off the competitor row rather than the gap table |
 | `keyword-ideas` | SerpApi | on demand (My Business) | `keyword_ideas` |
 | `social-scan` | Apify | cron + "Scan now" | `social_posts`, `social_post_metrics` |
-| `site-scan` | Apify (the website actor already configured, `APIFY_CONTACTS_ACTOR_ID`; optional `APIFY_SITE_ACTOR_ID` override) | the shared pull-to-refresh on Suppliers / Competition (+ cron) | `supplier_items`, `competitor_items` (one row per **change**), `scan_runs`; advances `site_scan_at` / `site_run_id` / `last_scan_at` / `next_scan_at` on the source |
+| `site-scan` | Apify — `APIFY_SITE_ACTOR_ID`, a **product-catalogue** actor, run with `discoverProducts` so the start URL is read as a storefront. Required in practice, not optional: the contacts crawler returns no product rows and no JSON-LD, so a catalogue read through it starts, bills and reports `succeeded` while writing **0** rows | the shared pull-to-refresh on Suppliers / Competition (+ cron) | `supplier_items`, `competitor_items` (one row per **change**), `scan_runs`; advances `site_scan_at` / `site_run_id` / `last_scan_at` / `next_scan_at` on the source |
+| `traffic-scan` | Apify — `APIFY_TRAFFIC_ACTOR_ID` (SimilarWeb through Apify; verified: `curious_coder/similarweb-scraper`). **Required in practice**: nothing else writes these tables, so without it every traffic tile reads 0 and every traffic chart draws nothing | every pull, for the whole workspace in one run (`{ domains: [...] }` — our domain plus every rival's) | `businesses.monthly_visits` / `visits_change`, `my_metrics` (`traffic`, `channel`), `competitors.monthly_visits` / `visits_change`, `competitor_metrics` (`traffic`, `traffic_source`), `scan_runs` (`traffic`). The series is **restated**, one `kind` at a time |
+| `ads-scan` | Apify — `APIFY_ADS_ACTOR_ID` (Meta Ad Library; verified: `apify/facebook-ads-scraper`). Read only for a competitor whose **Facebook page is saved**, because the library resolves a page exactly and a name not at all | every pull, one run covering every addressable competitor | `competitor_ads` (restated per competitor), `competitor_social.ads_running`, `scan_runs` (`ads`) |
 | `web-contacts-scan` | Apify (the `contacts` slot, `APIFY_CONTACTS_ACTOR_ID`) | onboarding "Find them automatically" + Competition → Social presence | `competitors.contacts_*` and its own run ledger — **never** `competitor_social`, which it only proposes rows for. See [`docs/SOURCE_MANAGEMENT_BLUEPRINT.md`](SOURCE_MANAGEMENT_BLUEPRINT.md) Phases 3–4 |
 | `reviews-sync` | SerpApi + Apify (the `reviews` slot) | "Scan reviews now" | `my_reviews`, `my_review_sources`, `review_connections` |
 | `review-reply` | Google Business Profile (not connected yet) | user action | `review_replies`, updates `my_reviews.replied` |
@@ -111,7 +113,11 @@ the cadence already stored per source:
   the source row while the crawl works, then records `succeeded`/`failed` with the number of changes
   it found. Nothing consumes a `queued` row — a scan that has not run is not a scan.
 - The trigger today is the pull-to-refresh gesture the three monitoring pages share (capped at one
-  sweep an hour, which is what rations the spend). A cron caller invokes the same function per
+  sweep per window — `PULL_REFRESH_INTERVAL_MS`, **20 minutes** — which is what rations the spend).
+  The cap gates *starting* work, not finishing it: a
+  source whose run id is still on the row — a crawl already billed and not yet read back — is
+  collected by the next pull even inside the window, and only those sources are touched.
+- A cron caller invokes the same function per
   source with `{ businessId, target, sourceId }`; no extra code is needed for it.
 
 ---
@@ -119,6 +125,26 @@ the cadence already stored per source:
 ## 3. Feature → provider → app-surface map
 
 This is the master mapping. Every requested capability from the brief appears here exactly once.
+
+**Panels that have no producer at all.** They are called out here because the pages render an empty
+state indistinguishable from a scan that failed, which is the most misleading thing about this app
+today. Every row below is a feature that was **never built**, not a read that broke:
+
+| Table / column (empty by design) | Panel it feeds | What a producer would need |
+| --- | --- | --- |
+| `competitor_reviews` | Competition → Reviews, the individual reviews | a reader aimed at a **competitor's** place id. `_shared/reviews.ts` reads *our* profiles and cannot be repointed at a rival's |
+| `competitor_audience` | Competition → Audience | no provider identified — the weakest of the set. Meta publishes an ad's *reach by country* only, which is geography, not the audience segments this panel claims |
+| `my_metrics` (`kind: search_surface`), `businesses.conversion_rate` | My Business → "Search surfaces", the conversion-rate line | no provider identified: SimilarWeb reports channels, not search surfaces, and nobody's estimate of another company's conversion rate would be real. The conversion line is therefore **hidden** rather than shown as 0% |
+| `weekly_reports` | My Business → SEO & GEO weekly report | a scheduled job that composes one from the scans' own output; nothing generates a week today |
+
+**Rows that *were* on this list and now have a producer** — `competitor_metrics` (traffic) and
+`competitors.monthly_visits` are written by `traffic-scan`, and `competitor_ads` by `ads-scan`. Both are
+verified against live runs; see `supabase/functions/README.md` and `LIVE_TEST_PLAN.md` §4b for what a
+correct run looks like.
+| `weekly_reports` | My Business → reports | derived from the tables above, so it can only work once they hold data |
+| `inventory_recommendations`, `buy_list_items` | Suppliers → restock advice and buy list | derived from `supplier_items`, which is empty for a different reason: the watched factory sites publish no product catalogue to read |
+
+Everything else on those three pages has a producer, and the tables below say which one:
 
 ### 3.1 SerpApi — search, local, maps, autocomplete
 
@@ -139,7 +165,11 @@ This is the master mapping. Every requested capability from the brief appears he
 Engines used: `google` (organic + local pack + rich snippets, with `device`), `google_local`,
 `google_maps` (`q`, `ll=@lat,lng,zoom`, `type=search|place`, `place_id`/`data_id`),
 `google_maps_reviews` (`data_id`) and `google_autocomplete` (`q`, `gl`, `hl`, `cp`). Responses carry
-`search_metadata`, `organic_results`, `local_results`, `place_results` and `suggestions`. The free tier
+`search_metadata`, `organic_results`, `local_results`, `place_results` and `suggestions`. **Their shape
+is not stable:** `local_results` is an array on most engines but an object on others — the Google engine
+in mobile device mode answers `{ places: [...] }`, and desktop omits the key entirely — so read it
+through `localResultsOf()` in `_shared/serpapi.ts` rather than off the response. Assuming an array threw
+inside `serp-scan`'s keyword loop, which aborted the whole run before it persisted anything. The free tier
 is 250 searches/month; cache hits (`no_cache=false`) are free, which matters because a device × location
 matrix multiplies fast. Fallback provider: **Bright Data SERP API** (≈5,000 free requests/mo).
 

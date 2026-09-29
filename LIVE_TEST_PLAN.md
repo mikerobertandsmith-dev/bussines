@@ -25,11 +25,13 @@ npx supabase secrets list                         # names only; values are never
 
 | Piece | What it is |
 | --- | --- |
-| 13 gateway functions | `serp-scan`, `serp-competitors`, `keyword-ideas`, `social-scan`, `web-contacts-scan`, `site-scan`, `reviews-sync`, `review-reply`, `ai-draft`, `publish-ad`, `social-accounts`, `provider-webhook`, `integrations-status` |
-| 15 migrations | `0008`–`0022` (integration foundation → competitor discovery → its run ledger → site-scan change columns → the business search-visibility columns) |
+| 15 gateway functions | `serp-scan`, `serp-competitors`, `keyword-ideas`, `social-scan`, `web-contacts-scan`, `site-scan`, `traffic-scan`, `ads-scan`, `reviews-sync`, `review-reply`, `ai-draft`, `publish-ad`, `social-accounts`, `provider-webhook`, `integrations-status` |
+| 17 migrations | `0008`–`0024` (integration foundation → competitor discovery → its run ledger → site-scan change columns → the business search-visibility columns → the traffic and ads scan source types) |
 | 5 providers | SerpApi, Apify, Reviews (via the two above), AI drafting (Groq), Mallary.ai |
 | 8 discovery secrets | `APIFY_CONTACTS_ACTOR_ID`, `…_MAX_CHARGE_USD`, `…_MAX_PAGES`, `…_MAX_DEPTH`, `…_RUN_TIMEOUT_SECS`, `…_ENRICH_PROFILES`, `…_PREVIEW_MAX_PER_HOUR`, `…_REUSE_WINDOW_MINUTES` |
-| 4 site-scan secrets | `APIFY_SITE_MAX_PAGES`, `APIFY_SITE_MAX_CHARGE_USD`, `APIFY_SITE_RUN_TIMEOUT_SECS`, `APIFY_SITE_MAX_ITEMS` — all with working defaults. The read itself runs on the website actor the deployment already has (`APIFY_CONTACTS_ACTOR_ID`), with optional `APIFY_SITE_ACTOR_ID` as a dedicated override, so **no site-scan secret has to be set** |
+| 5 site-scan secrets | `APIFY_SITE_ACTOR_ID` — **required**, and the one that decides whether these pages work at all: it must be a product-catalogue actor, because the contacts crawler returns no product rows and no page JSON-LD, so a catalogue read through it reports `succeeded` and writes 0 rows. Plus `APIFY_SITE_MAX_PAGES`, `APIFY_SITE_MAX_CHARGE_USD`, `APIFY_SITE_RUN_TIMEOUT_SECS`, `APIFY_SITE_MAX_ITEMS`, which all have working defaults |
+| 2 traffic secrets | `APIFY_TRAFFIC_ACTOR_ID` — **required** for the traffic panels on My Business and Competition, which nothing else can fill. Plus `APIFY_TRAFFIC_MAX_CHARGE_USD`, `APIFY_TRAFFIC_MAX_DOMAINS`, `APIFY_TRAFFIC_RUN_TIMEOUT_SECS` |
+| 2 ads secrets | `APIFY_ADS_ACTOR_ID` — **required** for Competition's *Active ad campaigns* tile. Plus `APIFY_ADS_MAX_CHARGE_USD`, `APIFY_ADS_RESULTS_LIMIT`, `APIFY_ADS_MAX_TARGETS`, `APIFY_ADS_RUN_TIMEOUT_SECS` |
 
 **No provider key ever reaches the browser.** The app calls a gateway function; the function holds the
 key, makes the call server-side, and writes to a tenant-scoped table.
@@ -118,7 +120,7 @@ A token is short-lived. If a curl returns `401 Invalid or expired session token`
 
 ### 2.4 What `npm test` already proves — do not pay to re-prove it
 
-`npm test` runs **179 tests across 10 files** with no session, no tenant and no provider account:
+`npm test` runs **242 tests across 14 files** with no session, no tenant and no provider account:
 
 | Test file | Tests | What it proves |
 | --- | --- | --- |
@@ -127,11 +129,15 @@ A token is short-lived. If a curl returns `401 Invalid or expired session token`
 | `tests/app.test.tsx` | 30 | Every page flow in demo mode, including add/edit/remove for competitors and suppliers, the two-click confirm, and accepting a discovery result. |
 | `tests/onboarding.test.tsx` | 5 | The wizard: step validation, socials typed by hand (normalisation, replace-per-platform, remove), and accepting a discovery result with the right provenance. |
 | `tests/reviews.test.tsx` | 31 | Review readers, mapping, the reply gate, run state. |
-| `tests/social.test.tsx` | 25 | Post normalisation, engagement maths, cadence. |
+| `tests/social.test.tsx` | 38 | Post normalisation, engagement maths, cadence. |
 | `tests/ai.test.tsx` | 13 | Prompt building and output validation for the three drafting tasks. |
-| `tests/operations.test.tsx` | 28 | Budgets, alerts, workspace health, the provider catalogue and the capped-but-feature-off line. |
+| `tests/operations.test.tsx` | 37 | Budgets, alerts, workspace health, the provider catalogue and the capped-but-feature-off line. |
 | `tests/publishing.test.tsx` | 5 | Publish jobs and idempotency. |
 | `tests/rankings.test.tsx` | 7 | Ranking/keyword merging. |
+| `tests/seo.test.tsx` | 8 | The visibility score and standings derived from the rankings a scan just stored: banding, rich snippets, one standing per term on its best device, and a malformed position read as "not ranking" rather than position 0. |
+| `tests/site.test.tsx` | 21 | The catalogue read: price/stock parsing, JSON-LD and flat-row normalising, the exact input sent to the actor (including `discoverProducts`), the actor-configuration states, and that settling a **competitor** never names a supplier-only column. |
+| `tests/refresh.test.tsx` | 6 | The pull's own decisions: what it starts, that the window holds when nothing is waiting, that a crawl waiting to be collected is collected **inside** that window, and that a collection cannot push the next sweep out. |
+| `tests/serp-competitors.test.tsx` | 6 | The **real benchmark handler**, end to end, with only Clerk, Postgres and SerpApi faked: share of voice, the keyword rows, one review-trend point per rival, the rerun prune staying inside its tenant, and the ratings and review counts written back onto the competitor row the pages read. |
 
 ```bash
 npm test
@@ -172,6 +178,31 @@ Under about a dollar if you run it once. The per-workspace ceilings are in §10.
       secrets reached the runtime: if the actor id were missing you would see
       *"Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID to switch it on."* Check this
       **before** spending anything, because nothing in §4 will work without it.
+
+- [ ] **One query says what every panel on the three pages should be showing.** Run this before a
+      pass and after each one. A column that stays `0` is either a table with no producer (§2 note in
+      `docs/API_INTEGRATION_BLUEPRINT.md`) or a scan that has not run yet — and those are different
+      problems, which is the distinction the pages themselves cannot make:
+
+      ```bash
+      sql "select
+        (select count(*) from suppliers) suppliers, (select count(*) from supplier_items) supplier_items,
+        (select count(*) from competitors) competitors, (select count(*) from competitor_items) competitor_items,
+        (select count(*) from competitor_metrics where kind='traffic') traffic_points,
+        (select count(*) from competitor_metrics where kind='review_trend') review_trend,
+        (select count(*) from competitor_social) comp_social, (select count(*) from social_posts) social_posts,
+        (select count(*) from competitor_keywords) comp_keywords, (select count(*) from my_keywords) my_keywords,
+        (select count(*) from serp_rankings) serp_rankings, (select count(*) from local_pack_rankings) local_packs,
+        (select count(*) from competitor_share_of_voice) share_of_voice,
+        (select count(*) from competitor_review_gap) review_gap,
+        (select count(*) from competitors where rating is not null) rival_ratings"
+      ```
+
+      Expected on a workspace that has pulled once with keywords tracked: `suppliers` 3+,
+      `competitors` 2+, `my_keywords` 1+, `serp_rankings` = terms × devices, `local_packs` = terms,
+      `comp_keywords` = terms × rivals, `review_trend` = rivals, `share_of_voice` = rivals,
+      `review_gap` = rivals, `rival_ratings` = rivals. `traffic_points`, `comp_social`, `social_posts`
+      and the reviews/ads/audience tables stay 0 until their producer is built or a handle is accepted.
 
 - [ ] **Monitoring health** reads "Nothing needs attention" on a clean workspace
 - [ ] **Plan usage** is hidden until something has actually been spent (honest, not broken)
@@ -454,15 +485,15 @@ them here is that the suite fakes Postgres, so this is where the **real** `0020`
 ### 4.8 Catalogue scans — suppliers and competitors (`site-scan`)
 
 This is what the shared pull-to-refresh gesture runs, and the only thing that writes
-`supplier_items` / `competitor_items`. Both pages are served by one actor: the website crawler the
-deployment already has, `APIFY_CONTACTS_ACTOR_ID` — a supplier and a competitor are the same thing to
-this read, a business with a website — so nothing has to be added for these pages to work. Do this
-once in the default state, once with the optional override, and once with no website actor at all.
+`supplier_items` / `competitor_items`. Both pages are served by one actor, `APIFY_SITE_ACTOR_ID`, because
+a supplier and a competitor are the same thing to this read — a business with a website. It has to be a
+**product-catalogue** actor, run with `discoverProducts`: the contacts crawler reads contact details, so
+pointing this read at it bills every source, reports every scan `succeeded`, and writes no rows at all.
+Do this once with a catalogue actor set, once with the slot empty, and once with no actor id at all.
 
-- [ ] **Configured with no new secret (the normal state)** → leave `APIFY_SITE_ACTOR_ID` unset and
-      `APIFY_CONTACTS_ACTOR_ID` set, pull down on Suppliers, and expect *"N of M site scans ran"*.
-      This is the check that the Suppliers and Competition pages need no secret of their own. Then
-      confirm each source moved:
+- [ ] **Configured (the normal state)** → set `APIFY_SITE_ACTOR_ID` to a product-catalogue actor, pull
+      down on Suppliers, and expect *"N of M site scans ran"*. Then confirm each source moved **and
+      that rows landed** — a scan reporting success is not the same as a catalogue arriving:
 
       ```bash
       sql "select name, last_scan_at, next_scan_at, site_scan_at, site_error, site_run_id
@@ -472,16 +503,21 @@ once in the default state, once with the optional override, and once with no web
            and endpoint like 'site:%' order by created_at desc limit 10"
       ```
 
-- [ ] **Dedicated catalogue actor (optional override)** → set `APIFY_SITE_ACTOR_ID` to an actor that
-      reads product pages — one value, used by both pages — and repeat the pull. Expect the same toast
-      and that the usage rows above still land once per source. Put it back afterwards.
+- [ ] **Misconfigured — the failure that hides.** This is the check worth doing, because nothing else
+      reports it: clear `APIFY_SITE_ACTOR_ID` but leave `APIFY_CONTACTS_ACTOR_ID` set, pull down, and
+      expect the scans to report **succeeded with 0 changes**, the usage rows above to still land (the
+      run is being billed), and `supplier_items` to stay **empty**. The Integrations panel should be
+      showing *"Website catalogue reading is off — add APIFY_SITE_ACTOR_ID to switch it on."* If the
+      panel says nothing while the catalogue is empty, that is the bug this line fixes. Put
+      `APIFY_SITE_ACTOR_ID` back.
 - [ ] **Not configured** → clear `APIFY_SITE_ACTOR_ID` *and* `APIFY_CONTACTS_ACTOR_ID` (the read uses
       whichever is present, so leaving the crawler set means it *is* configured), pull down on
       Suppliers, and expect the toast to report the site scans as **not run** rather than failed. No run
       is started, so `sql "select count(*) from scan_runs where source_type='supplier' and created_at > now() - interval '5 minutes'"`
       stays at 0. Put `APIFY_CONTACTS_ACTOR_ID` back — competitor discovery is off without it.
 
-- [ ] **A second pull finds only what moved.** Pull again an hour later (or clear
+- [ ] **A second pull finds only what moved.** Pull again after the window
+      (`PULL_REFRESH_INTERVAL_MS`, 20 minutes — or clear
       `localStorage['workspace:pull-refresh-at']`) and expect `changes` to be 0 or small — **not** the
       whole catalogue again. A product re-read unchanged must not appear as `new_product`:
 
@@ -500,9 +536,51 @@ once in the default state, once with the optional override, and once with no web
            where endpoint like 'site:%' order by created_at desc limit 5"
       ```
 
-- [ ] **Competition → New inventory** shows what changed on their site, with the price move and the
-      stock move behind each row, and an empty list reads as "their catalogue held still" rather than
-      as a failure.
+      That next pull is **not blocked by the pull cap**, and must not be: the crawl has already been
+      billed, and the cap exists to stop the *sweep* re-running, not to hide a dataset the user paid
+      for. Pull straight after the one that said "still running" and expect a `Collected — N of M
+      waiting catalogue reads collected` toast — with the three live scans **not** re-run. Confirm the
+      stamp was left alone, so the sweep is still due when it was:
+
+      ```bash
+      # in the browser console, before and after that pull — must not change
+      localStorage.getItem('workspace:pull-refresh-at')
+      ```
+
+- [ ] **The cap still holds when nothing is waiting.** With `sql "select name from suppliers where
+      site_run_id is not null"` and the same for `competitors` both empty, pull inside the window and
+      expect the plain *"Already up to date"* toast, no `api_usage_log` row, and no new `scan_runs` row.
+
+- [ ] **Competition → New inventory** shows what changed on their site, with the move behind each
+      row, and an empty list reads as "their catalogue held still" rather than as a failure. Note the
+      Suppliers page no longer carries Price moves / Stock moves / Promotions: nothing we read
+      publishes a comparable buy price or stock level, so those panels could only ever be empty.
+
+- [ ] **Suppliers → Catalogue reads says what each read did.** This is the check the page needed but
+      never had. The change table can only show *products*, and every supplier watched here publishes
+      none — so the page had one number for a read (changes found) that was permanently 0, which is
+      indistinguishable from a scan that never runs. Expect one row per supplier with a state:
+
+      - *no catalogue* — read cleanly, the site publishes nothing to monitor. `site_scan_at` is set and
+        there are no items. **This is the state all three current suppliers are in**, and it is why an
+        empty table is the correct answer rather than a fault.
+      - *listing products* — items are held, so the read worked.
+      - *read failed* — `site_error` is set; the row quotes it.
+      - *reading* — a crawl is in flight (`site_run_id` set).
+      - *not read yet* — no read has settled. **Not the same as *no catalogue*** and must never render
+        the same way.
+
+      ```bash
+      sql "select name, site_scan_at, site_error, last_scan_at,
+                  (select count(*) from supplier_items i where i.supplier_id=s.id) items
+           from suppliers s order by name"
+      sql "select count(*) from supplier_items"   -- 0 while every source is a factory site
+      ```
+
+      The card's subtitle reads the set back (*"3 supplier sites checked — 3 with no catalogue to
+      read"*), the *New items this cycle* tile says why it is 0, and the table's empty state stops
+      blaming the date filters. **Read now** re-reads one supplier on demand and reports the same
+      answer — a run still going says so rather than claiming a result.
 
 ### Deliberate non-features
 
@@ -516,6 +594,132 @@ once in the default state, once with the optional override, and once with no web
   (`api_usage_log.business_id` is null).
 - **Suggestions are never auto-applied.** A footer link can belong to the site's web agency rather
   than the brand, and every accepted handle becomes a billed scrape target.
+
+---
+
+## 4b. Website traffic and competitor advertising
+
+Two producers that exist because their panels were otherwise structurally empty. Both are run by every
+pull, and neither needs a button: they are part of the six live scans.
+
+> ### Start here: is Apify refusing everything?
+>
+> On 2026-09-29 the account hit its **$5 monthly hard limit** ($5.07 used) and every Apify call began
+> returning `403 platform-feature-disabled: Monthly usage hard limit exceeded`. Supplier catalogue
+> reads, competitor inventory, social, traffic and advertising all stopped **at once** and each looked
+> separately broken. Check this first, because nothing else on this page can work while it is true:
+>
+> ```bash
+> set -a; . ./.env.local; set +a
+> curl -s "https://api.apify.com/v2/users/me/limits" -H "Authorization: Bearer $APIFY_TOKEN" | python3 -c "
+> import json,sys; d=json.load(sys.stdin)['data']; c=d['current']; l=d['limits']
+> print(f\"used \${c['monthlyUsageUsd']:.2f} of \${l['maxMonthlyUsageUsd']} — cycle ends {d['monthlyUsageCycle']['endAt'][:10]}\")"
+> ```
+>
+> - [ ] **The refusal is explained, not swallowed.** With the limit spent, any Apify-backed scan must
+>       answer with a sentence naming Apify, the monthly limit and what fixes it — **not**
+>       `Provider request failed (403)`. That message is the whole reason six features looked broken.
+>       It is raised as 429, and it must not be retried: one attempt, one message.
+> - [ ] **The cost of a read is bounded.** `APIFY_SITE_MAX_ITEMS` is a *price*, not just a breadth —
+>       the actor bills per product returned, and the old 200-item cap cost **$1.00 a read**. Confirm
+>       a read costs about $0.30 and that the ledger agrees:
+>
+>       ```bash
+>       sql "select endpoint, round(sum(cost_usd)::numeric,4) cost, count(*) from api_usage_log
+>            where provider='apify' and created_at > now() - interval '1 day' group by 1 order by 2 desc"
+>       ```
+
+### 4b.1 `traffic-scan` — My Business *Website traffic* and Competition *Their monthly traffic*
+
+One Apify run prices our domain and every rival's together (`{ domains: [...] }`), which is why the two
+pages always agree about the same site. Costs about **$0.001** for eight domains.
+
+- [ ] **Measured** → expectations, all of which held on 2026-09-29:
+
+      ```bash
+      sql "select monthly_visits, visits_change from businesses where id='<business>'",
+      sql "select name, monthly_visits, visits_change from competitors order by monthly_visits desc"
+      sql "select kind, label, value, sort_order from my_metrics where kind in ('traffic','channel') order by kind, sort_order"
+      sql "select count(*) from competitor_metrics where kind in ('traffic','traffic_source')"
+      sql "select source_type, status, changes_found from scan_runs where source_type='traffic' order by started_at desc limit 3"
+      ```
+
+      Live result: 8 of 8 domains measured, `10,435,813` visits (+39.5%) for the site itself, three
+      months of series and ten channel rows for us, three `traffic` plus ten `traffic_source` rows for
+      each of the seven rivals. The response names which domains came back; My Business shows the
+      series and the channel mix, Competition shows the rival's line and sources.
+
+- [ ] **A restatement, not a merge.** The provider reports the whole three-month series every run, so
+      run it twice and expect the row **counts to stay identical** — a merge would grow the chart a
+      duplicate point per scan. `sort_order` is months since the epoch, and the channel rows are
+      ordered largest-first because their `sort_order` is the display order.
+- [ ] **The estimate is labelled as one.** My Business says "Estimated visits in the latest month" and
+      "Visits are estimates"; nothing claims these figures are counted. SimilarWeb models them.
+- [ ] **A domain with no data is not a zero.** `unavailable` in the response lists it, the tile stays
+      empty, and nothing is written for it. `0 visits` and `nobody has looked` must not render the same.
+- [ ] **Conversion rate is hidden, not faked.** No provider we hold reports it, so the line is omitted
+      and a sentence says why — previously it printed "Conversion rate 0% · 0 orders last month", which
+      reads as a measured zero.
+
+### 4b.2 `ads-scan` — Competition *Active ad campaigns*
+
+- [ ] **The tile needs a Facebook page, and says so.** With no competitor holding one, the scan answers
+      `status: "unavailable"` with a per-competitor reason and **starts no provider run** — confirming
+      `sql "select count(*) from scan_runs where source_type='ads' and created_at > now() - interval '5 minutes'"`
+      stays 0, because nothing was spent. The tile shows an **em dash**, not a 0, and its meta line says
+      *"add their Facebook page on the Social tab to read their ads"*. A 0 would mean "not advertising".
+- [ ] **Add a page and it fills.** Competition → Social presence → add the rival's **Facebook** page,
+      pull down, and expect *"N active Meta ads across M competitor pages"*. On 2026-09-29 four pages
+      (`arcteryx`, `ColumbiaSportswear`, `Marmot`, `REI`) produced 9 live Meta ads between them, with
+      real creative headlines, real start dates and `ads_running` written back onto each
+      `competitor_social` row — which is what the Social tab's per-channel "Ads live" reads.
+
+      ```bash
+      sql "select c.name, a.platform, a.status, a.headline, a.first_seen_at::date from competitor_ads a
+           join competitors c on c.id=a.competitor_id order by c.name, a.first_seen_at desc"
+      sql "select c.name, s.platform, s.handle, s.ads_running from competitor_social s
+           join competitors c on c.id=s.competitor_id order by c.name"
+      ```
+
+- [ ] **Attribution is exact, and stays exact.** Meta's search does not return the advertiser you asked
+      for — a live search for *Patagonia* returned Mapu Lahual Chile, Rue La La, On Water Expeditions,
+      MRCOOL and Helados Patagonia, and `search_type=page` returned the same set. So a result is only
+      ever stored when its advertiser's page name or profile handle matches the competitor exactly;
+      `unmatched` in the response counts what was rejected. Never accept a "contains" match here: it
+      would file Helados Patagonia's campaign under Patagonia and raise an urgent alert about it.
+- [ ] **A campaign that stops stops counting.** The rows are restated per competitor, so an ad the
+      library no longer lists disappears from `competitor_ads` and from the tile. `first_seen_at` is the
+      library's own start date, so the row's history survives the rewrite and the "new campaign" alert
+      still judges 5-day recency correctly.
+
+---
+
+### 4b.3 `buy-list` — My Business *Buy list*
+
+Calls no provider: the suggestions are derived from readings already on file, so this costs nothing and
+is the one live scan that keeps working while a provider is refusing us. It runs with every pull, and
+also has its own **Find suggestions** button on the tab.
+
+- [ ] **Fills from the rival catalogue we already read.** With a competitor whose catalogue has been
+      read, expect *"N suggestions from M tracked rivals"* and rows in `inventory_recommendations`:
+
+      ```bash
+      sql "select product, competitor_ref, estimated_price, traffic_potential, priority, reason
+           from inventory_recommendations order by priority, product limit 15"
+      ```
+
+      On 2026-09-29 this produced 12 real suggestions from Cotopaxi's 200-product catalogue, with
+      decoded names (`Men's`, not `Men&#39;s`), the rival's own shelf price and a checkable reason.
+- [ ] **It invents nothing.** `margin_pct` and `suggested_qty` must be **null** — there is no cost or
+      sales data on the server — and the card renders them as em dashes, never as `0%` or `null units`.
+      `estimated_price` is the rival's shelf price, labelled as an estimate, not a cost.
+- [ ] **A repeat run adds nothing.** Run it twice: the second answers *"every product the tracked
+      rivals listed is already on the buy list"* with `created: 0`. It also never rewrites a row already
+      on file, so a star the user has set is never thrown away.
+- [ ] **Gift cards are not suggestions.** A storefront catalogues `Digital Gift Card` like any product;
+      those rows must be absent, because they cannot be stocked.
+- [ ] **Priority is evidence, not enthusiasm.** `high` needs two rivals stocking the same product or a
+      match on a tracked term; a single fresh listing is `medium`.
 
 ---
 
@@ -538,7 +742,7 @@ costs **4 searches**.
       ```
 
       Expect `rankings_checked_at` moments old, and `top10_count` to equal the number of rows in the
-      Search tab whose position is 10 or better. Pull again an hour later: the current columns take the
+      Search tab whose position is 10 or better. Pull again after the window: the current columns take the
       figures the scan just derived and the `previous_*` columns take what they held, so a movement of
       zero is the honest answer when nothing moved.
 - [ ] Toggle **Desktop / Mobile** → the ranking table switches without a full reload
@@ -556,6 +760,25 @@ costs **4 searches**.
 **Competition → Local**
 
 - [ ] **Run benchmark** → Share of Voice and the competitor review gap for tracked rivals
+- [ ] The same run fills the panels that read the **competitor row** rather than the gap table. Until
+      this write existed, the Maps lookup returned each rival's stars and review count, they were stored
+      only in `competitor_review_gap`, and the page showed **0** beside a figure we had already paid
+      for. Expect every competitor to carry a real rating and count, and `previous_rating` to hold the
+      figure from the *previous* run — never the new one, or the movement column would always read zero:
+
+      ```bash
+      sql "select name, rating, previous_rating, review_count, reviews_this_month, last_scan_at
+           from competitors order by name"
+      sql "select name, their_rating, their_reviews from competitor_review_gap
+           join competitors on competitors.id = competitor_review_gap.competitor_id order by name"
+      ```
+
+      The two queries must agree on `rating` / `their_rating` and on `review_count` / `their_reviews`.
+      Run the benchmark twice: the second run moves `previous_rating` onto the first run's figure.
+      `reviews_this_month` counts growth since the earlier benchmark *of the same month*, and is 0 on
+      the first run of a month — that is a real zero, not a missing value.
+- [ ] `last_scan_at` moves with them, so *"Last scan"* on the page is when we actually read the
+      competitor rather than the page-open time it used to fall back to
 
 ---
 

@@ -1,4 +1,4 @@
-import { SignedIn, SignedOut } from "@clerk/clerk-react";
+import { ClerkLoaded, ClerkLoading, SignedIn, SignedOut } from "@clerk/clerk-react";
 import { AlertTriangle } from "lucide-react";
 import { Layout } from "./components/Layout";
 import { PullToRefresh } from "./components/PullToRefresh";
@@ -94,16 +94,29 @@ export function App() {
     <ToastProvider>
       {authEnabled ? (
         <>
-          <SignedOut>
-            <PublicArea />
-          </SignedOut>
-          <SignedIn>
-            <WorkspaceProvider>
-              <RefreshProvider>
-                <WorkspaceGate />
-              </RefreshProvider>
-            </WorkspaceProvider>
-          </SignedIn>
+          {/*
+           * Clerk's own `SignedIn`/`SignedOut` render **nothing at all** until
+           * the session is resolved, and they are the only thing here — so while
+           * Clerk initialises, or if it never finishes, the page was completely
+           * blank. That is the worst possible failure: no spinner, no message, and
+           * nothing to tell the user whether to wait or to look at the console.
+           * The loader covers that gap; the boundary above it covers a crash.
+           */}
+          <ClerkLoading>
+            <WorkspaceLoading label="Checking your session…" />
+          </ClerkLoading>
+          <ClerkLoaded>
+            <SignedOut>
+              <PublicArea />
+            </SignedOut>
+            <SignedIn>
+              <WorkspaceProvider>
+                <RefreshProvider>
+                  <WorkspaceGate />
+                </RefreshProvider>
+              </WorkspaceProvider>
+            </SignedIn>
+          </ClerkLoaded>
         </>
       ) : (
         <WorkspaceProvider>

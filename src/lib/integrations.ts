@@ -381,6 +381,20 @@ export interface SerpScanResult {
   rankings: number;
   packKeywords: number;
   placeId: string;
+  /**
+   * The AI-overview pass: how many answers were read, how many cited us, and the
+   * resulting 0–100 GEO score (`null` when Google served no overview to read).
+   */
+  geo?: {
+    /** Bodies read back successfully — the denominator of `score`. */
+    overviewsRead: number;
+    /** Body requests made, read or not: what the provider billed. */
+    overviewsRequested: number;
+    cited: number;
+    score: number | null;
+    /** True when the monthly budget stopped the overview reads early. */
+    capped: boolean;
+  };
   /** True when the workspace's monthly budget, not the tracked list, cut the run short. */
   capped: boolean;
 }
@@ -427,6 +441,94 @@ export interface SiteScanResult {
   costUsd?: number;
   /** Why the read failed, or which variable is missing when unavailable. */
   reason?: string;
+}
+
+/**
+ * The outcome of building the buy list (`buy-list`).
+ *
+ * The suggestions are **derived from readings we already hold** — what each rival
+ * newly listed, matched against the tracked terms — so no provider is called and
+ * this costs nothing. `reason` carries the explanation when there was nothing to
+ * add, which is the common case on a second run.
+ */
+export interface BuyListResult {
+  /** done | unavailable */
+  status: string;
+  /** Suggestions added by this run. */
+  created: number;
+  /** Competitor products considered. */
+  considered: number;
+  /** True when the per-run limit, not the catalogue, cut the list short. */
+  capped?: boolean;
+  /** Suggestions already on file; a repeat run skips these. */
+  alreadyOnFile?: number;
+  samples?: { product: string; reason: string }[];
+  message?: string;
+  reason?: string;
+}
+
+/**
+ * The outcome of reading competitor advertising (`ads-scan`).
+ *
+ * Only competitors with a saved Facebook page can be read — the library resolves
+ * a page exactly and a name not at all — so `skipped` and the `unavailable`
+ * status are the normal outcomes for a workspace that has not declared its
+ * rivals' pages yet, and they say what to add.
+ */
+export interface AdsScanResult {
+  /** done | unavailable | a provider status while the run is still going. */
+  status: string;
+  running: boolean;
+  scanned: number;
+  /** Ad rows stored by this run. */
+  ads: number;
+  /** Of those, how many are still running. */
+  active: number;
+  /** Competitors whose page had live campaigns. */
+  read: string[];
+  /** Competitors whose page read cleanly and is running nothing. */
+  empty: string[];
+  /** Results the library returned for other advertisers, so a miss is visible. */
+  unmatched: number;
+  skipped: { competitor: string; reason: string }[];
+  capped?: boolean;
+  costUsd?: number;
+  message?: string;
+  reason?: string;
+}
+
+/**
+ * The outcome of measuring website traffic (`traffic-scan`).
+ *
+ * Every figure here is an estimate from a third-party model, not a reading of
+ * anyone's analytics — which is why the pages that show it say "estimated".
+ * `unavailable` is kept separate from a zero: a site the provider has no data for
+ * is not a site with no visitors, and folding the two together was how a missing
+ * measurement could look like a real one.
+ */
+export interface TrafficScanResult {
+  /** SUCCEEDED, or the provider's own status when the run outlived our wait. */
+  status: string;
+  /** True when the run was still working; run the scan again to collect it. */
+  running: boolean;
+  /** True when `APIFY_TRAFFIC_MAX_DOMAINS`, not the workspace, cut the list short. */
+  capped: boolean;
+  /** Domains priced by this run. */
+  domains: number;
+  /** Domains that returned figures — ours plus one per measured rival. */
+  measured: number;
+  /** Our own site's latest figures, when the provider had any. */
+  ours: { visits: number; visitsChange: number } | null;
+  /** Rival names that were measured. */
+  rivals: string[];
+  /** Sources the provider had no data for, named rather than silently skipped. */
+  unavailable: string[];
+  /** Sources with no website to measure. */
+  noWebsite: string[];
+  /** True when the monthly allowance lowered the per-run spend ceiling. */
+  spendLimited: boolean;
+  costUsd: number;
+  message?: string;
 }
 
 export interface ReviewSyncResult {

@@ -66,7 +66,11 @@ export function buildAlerts(data: WorkspaceData): Alert[] {
           id: `alert-${ad.id}`,
           page: "competition",
           title: `${comp.name}: new ${ad.platform} campaign`,
-          detail: `"${ad.headline}" — audience: ${ad.audience}.`,
+          // The ad library discloses reach only for some ads; when it discloses
+          // none the sentence must not read "audience: .".
+          detail: ad.audience
+            ? `"${ad.headline}" — audience: ${ad.audience}.`
+            : `"${ad.headline}" is running.`,
           at: ad.firstSeen,
           severity: "urgent",
         });

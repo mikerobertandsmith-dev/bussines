@@ -90,6 +90,8 @@ export function BusinessPage() {
     geoVisibility,
     weeklyReports,
     buyList,
+    // Needed for what "Industry rank" is measured against: the tracked set.
+    competitors,
   } = workspace;
 
   const [tab, setTab] = useState<BusinessTab>("overview");
@@ -102,6 +104,8 @@ export function BusinessPage() {
   /** Themes the current suggestions were grouped into; empty until asked. */
   const [clusters, setClusters] = useState<KeywordCluster[]>([]);
   const [clustering, setClustering] = useState(false);
+  /** Building the buy list from what rivals have newly listed. */
+  const [suggesting, setSuggesting] = useState(false);
 
   // One row per keyword for the chosen device, plus a keyword → pack lookup.
   const deviceRankings = serpRankings.filter((row) => row.device === device);
@@ -192,6 +196,29 @@ export function BusinessPage() {
     );
   }
 
+  /**
+   * Rebuilds the buy list from the competitor catalogue we already hold.
+   *
+   * No provider is called: the suggestions are derived from what each rival has
+   * newly listed, matched against the tracked terms. The gateway skips anything
+   * already on file, so pressing this twice adds nothing the second time.
+   */
+  async function findSuggestions() {
+    setSuggesting(true);
+    try {
+      const result = await actions.runBuyList();
+      if (!result) {
+        toast("Buy-list suggestions need a live workspace.");
+        return;
+      }
+      toast(result.message ?? result.reason ?? "Buy list updated.");
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "Suggestions could not be built.");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
   async function trackIdea(idea: KeywordIdea) {
     try {
       await actions.saveKeywordIdea(idea);
@@ -206,6 +233,8 @@ export function BusinessPage() {
 
   const seoDelta = deltaPct(myBusiness.seoScore, myBusiness.previousSeoScore);
   const geoDelta = deltaPct(myBusiness.geoScore, myBusiness.previousGeoScore);
+  // "Cited" is a GEO row with a position: the answer named us or linked a page.
+  const geoCited = topGeoKeywords.filter((keyword) => keyword.position >= 1).length;
   const industryDelta = myBusiness.industryRankPrevious - myBusiness.industryRank;
   // The health card's search figures come from `serp-scan`, which derives them from
   // the rankings it stores. Worded against the previous scan, so a number is never
@@ -358,14 +387,23 @@ export function BusinessPage() {
           total={myBusiness.monthlyVisits}
           changePct={myBusiness.visitsChange}
           icon={<BarChart3 size={16} />}
-          caption="Visits in the last 30 days"
+          caption="Estimated visits in the latest month"
         />
         <MetricTile
           className="sm:col-span-2 xl:col-span-4"
           label="Industry rank"
           value={myBusiness.industryRank ? `#${myBusiness.industryRank}` : "—"}
           icon={<TrendingUp size={16} />}
-          hint={`${industryDelta >= 0 ? "up" : "down"} ${Math.abs(industryDelta)} places in ${profile.industry || "your industry"}`}
+          // Says what it is measured against. The old wording — "up N places in
+          // your industry" — described a movement in a column no scan wrote, so
+          // the figure it explained was always absent.
+          hint={
+            myBusiness.industryRank
+              ? `of ${competitors.length + 1} you track, by measured monthly visits${
+                  industryDelta ? ` · ${industryDelta > 0 ? "up" : "down"} ${Math.abs(industryDelta)}` : ""
+                }`
+              : "ranked once your monthly traffic is measured"
+          }
         />
       </div>
 
@@ -401,7 +439,17 @@ export function BusinessPage() {
             <CardHead
               icon={<Sparkles size={16} />}
               title="Search & AI visibility health"
-              subtitle={`${profile.primaryDomain || "your domain"} · domain authority ${myBusiness.domainAuthority} · ${myBusiness.indexedPages.toLocaleString()} pages`}
+              // Domain authority and indexed pages have no producer — the columns
+              // are null — so printing them as "0" read as measured zeros on the
+              // same card as the scores that *are* measured. They are named only
+              // when something has actually filled them.
+              subtitle={[
+                profile.primaryDomain || "your domain",
+                myBusiness.domainAuthority ? `domain authority ${myBusiness.domainAuthority}` : "",
+                myBusiness.indexedPages ? `${myBusiness.indexedPages.toLocaleString()} pages` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             />
             <div className="grid gap-4 px-4 py-4 sm:grid-cols-2 xl:grid-cols-1">
               <div className="rounded-xl bg-slate-50 p-3">
@@ -411,8 +459,10 @@ export function BusinessPage() {
                   top 10{top10Movement}.
                 </p>
                 <p className="mt-1 text-[11px] text-slate-600">
-                  {myBusiness.backlinks} backlinks · average position{" "}
-                  {profile.avgPosition ? profile.avgPosition : "—"}
+                  {/* Backlinks have no producer either, so the count is shown only
+                      when it exists — never as a bare "0 backlinks". */}
+                  {myBusiness.backlinks ? `${myBusiness.backlinks} backlinks · ` : ""}
+                  average position {profile.avgPosition ? profile.avgPosition : "—"}
                   {averagePositionMoved}
                   {rankingsChecked}
                 </p>
@@ -420,9 +470,15 @@ export function BusinessPage() {
               <div className="rounded-xl bg-slate-50 p-3">
                 <ScoreRing score={myBusiness.geoScore} label="GEO score" tone="warn" />
                 <p className="mt-2 text-[11px] text-slate-600">
-                  {myBusiness.topServers[2]
-                    ? `Cited by ${myBusiness.topServers[2].name} in ${myBusiness.topServers[2].share}% of tracked prompts.`
-                    : "No AI-answer data yet — GEO checks run after your domain scan."}
+                  {/* Read from the GEO rows themselves. This used to be worded off
+                      `topServers` — the *search surface* series, which nothing
+                      writes — so the live "cited in X of Y" figure could never
+                      appear however well the AI-overview pass had done. */}
+                  {geoCited
+                    ? `Cited in ${geoCited} of ${topGeoKeywords.length} AI answer${topGeoKeywords.length === 1 ? "" : "s"} checked.`
+                    : topGeoKeywords.length
+                      ? `Not cited in any of the ${topGeoKeywords.length} AI answers checked yet.`
+                      : "No AI answer checked yet — the GEO pass runs with your keyword scan."}
                 </p>
               </div>
             </div>
@@ -443,42 +499,64 @@ export function BusinessPage() {
             <CardHead
               icon={<Globe2 size={16} />}
               title="Traffic on your platform"
-              subtitle="Monthly visits, channels and which search surfaces send them"
+              subtitle="Estimated monthly visits and the channels they came through"
             />
             <div className="grid gap-5 px-4 py-4 md:grid-cols-2">
               <div>
-                <AreaChart data={myBusiness.traffic} color="#4f46e5" />
-                <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
-                  <span>Conversion rate {myBusiness.conversionRate}%</span>
-                  <span>·</span>
-                  <span>
-                    {Math.round(
-                      myBusiness.monthlyVisits * (myBusiness.conversionRate / 100),
-                    ).toLocaleString()}{" "}
-                    orders last month
-                  </span>
-                </div>
+                {myBusiness.traffic.length ? (
+                  <AreaChart data={myBusiness.traffic} color="#4f46e5" />
+                ) : (
+                  <p className="py-6 text-center text-[11px] text-slate-500">
+                    No traffic series yet — run a refresh to read your visits.
+                  </p>
+                )}
+                {/* Conversion is deliberately absent until something measures it:
+                    no provider we hold reports it, and a stored 0 would read as
+                    "nobody converts" rather than "nobody has looked". */}
+                {myBusiness.conversionRate > 0 ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-slate-600">
+                    <span>Conversion rate {myBusiness.conversionRate}%</span>
+                    <span>·</span>
+                    <span>
+                      {Math.round(
+                        myBusiness.monthlyVisits * (myBusiness.conversionRate / 100),
+                      ).toLocaleString()}{" "}
+                      orders last month
+                    </span>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-[11px] text-slate-500">
+                    Visits are estimates. Conversion rate is not measured yet, so no order
+                    count is shown.
+                  </p>
+                )}
               </div>
               <div className="space-y-4">
                 <div>
                   <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
                     Channels
                   </p>
-                  <BarList
-                    data={myBusiness.trafficSources.map((s) => ({ label: s.label, value: s.share }))}
-                    valueFormat={(n) => `${n}%`}
-                  />
+                  {myBusiness.trafficSources.length ? (
+                    <BarList
+                      data={myBusiness.trafficSources.map((s) => ({ label: s.label, value: s.share }))}
+                      valueFormat={(n) => `${n}%`}
+                    />
+                  ) : (
+                    <p className="text-[11px] text-slate-500">No channel data yet.</p>
+                  )}
                 </div>
-                <div>
-                  <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
-                    Search surfaces
-                  </p>
-                  <BarList
-                    data={myBusiness.topServers.map((s) => ({ label: s.name, value: s.share }))}
-                    valueFormat={(n) => `${n}%`}
-                    color="#0d9488"
-                  />
-                </div>
+                {myBusiness.topServers.length ? (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                      Search surfaces
+                    </p>
+                    <BarList
+                      data={myBusiness.topServers.map((s) => ({ label: s.name, value: s.share }))}
+                      valueFormat={(n) => `${n}%`}
+                      color="#0d9488"
+                    />
+                  </div>
+                ) : null}
               </div>
             </div>
           </Card>
@@ -543,24 +621,24 @@ export function BusinessPage() {
             <Card>
               <CardHead
                 icon={<Bot size={16} />}
-                title="Top ranking GEO prompts this week"
-                subtitle="Where AI assistants mention you for your industry"
-                action={<Badge tone="brand">{topGeoKeywords.length} prompts</Badge>}
+                title="AI answers for your tracked terms"
+                subtitle="Google's AI Overview, and whether it cites you"
+                action={<Badge tone="brand">{topGeoKeywords.length} checked</Badge>}
               />
               {topGeoKeywords.length === 0 ? (
                 <EmptyState
-                  title="No GEO prompts yet"
-                  hint="AI answer checks run after your domain scan."
+                  title="No AI answer checked yet"
+                  hint="Your tracked terms are checked for a Google AI Overview on every scan."
                 />
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[560px]">
                     <thead className="bg-slate-50">
                       <tr>
-                        <Th>Prompt</Th>
-                        <Th>Engine</Th>
-                        <Th className="text-center">Position</Th>
-                        <Th className="text-right">Change</Th>
+                        <Th>Term</Th>
+                        <Th>Answer engine</Th>
+                        <Th className="text-center">In the answer</Th>
+                        <Th className="text-right">Sources cited</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -569,21 +647,23 @@ export function BusinessPage() {
                           <Td className="font-medium text-slate-900">"{k.prompt}"</Td>
                           <Td className="text-xs text-slate-600">{k.engine}</Td>
                           <Td className="text-center">
-                            <Badge
-                              tone={k.position <= 3 ? "good" : k.position <= 8 ? "info" : "warn"}
-                            >
-                              #{k.position}
-                            </Badge>
+                            {k.position >= 1 ? (
+                              <Badge tone="good">Cited</Badge>
+                            ) : (
+                              <Badge tone="neutral">Not cited</Badge>
+                            )}
                           </Td>
-                          <Td className="text-right">
-                            <DeltaPill value={k.change} suffix=" pos" />
-                          </Td>
+                          <Td className="text-right text-xs text-slate-500">{k.sources}</Td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
               )}
+              <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
+                “Cited” means the answer named you or linked one of your pages. This reads
+                Google's AI Overview only — no other assistant is claimed.
+              </div>
             </Card>
           </div>
 
@@ -889,7 +969,10 @@ export function BusinessPage() {
           <CardHead
             icon={<ShoppingCart size={16} />}
             title="Inventory you should get next"
-            subtitle="Built from competitor traffic, keyword gaps and supplier price moves"
+            // Says what it is actually built from. The old line named competitor
+            // traffic and supplier price moves, neither of which this window ever
+            // read — which is why it stayed empty in every workspace.
+            subtitle="Built from what your rivals have newly listed, matched against your tracked terms"
             action={
               <div className="flex flex-wrap items-center gap-2">
                 <Segmented
@@ -903,13 +986,27 @@ export function BusinessPage() {
                     { value: "low", label: "Low" },
                   ]}
                 />
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  onClick={() => void findSuggestions()}
+                  disabled={suggesting}
+                >
+                  <Sparkles size={14} />
+                  {suggesting ? "Building…" : "Find suggestions"}
+                </button>
                 <button type="button" className={btnGhost} onClick={exportBuyList}>
                   <Download size={14} /> Export buy list
                 </button>
               </div>
             }
           />
-          {recommendations.length === 0 ? (
+          {inventoryRecommendations.length === 0 ? (
+            <EmptyState
+              title="No suggestions yet"
+              hint="They are built from what the rivals you track have newly listed. Add a competitor and run a catalogue scan on Competition, then refresh this page."
+            />
+          ) : recommendations.length === 0 ? (
             <EmptyState title="Nothing at this priority" hint="Switch the priority filter." />
           ) : (
             <div className="grid gap-4 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
@@ -922,7 +1019,10 @@ export function BusinessPage() {
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{r.product}</p>
                         <p className="text-[11px] text-slate-500">
-                          {r.category} · {supplier?.name}
+                          {/* A derived suggestion has no supplier — it came from a
+                              rival's shelf — so the separator is joined rather
+                              than printed over an empty second half. */}
+                          {[r.category, supplier?.name].filter(Boolean).join(" · ")}
                         </p>
                       </div>
                       <Badge
@@ -941,7 +1041,11 @@ export function BusinessPage() {
                     <dl className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
                       <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                         <dt className="text-slate-500">Suggested buy</dt>
-                        <dd className="font-semibold text-slate-900">{r.suggestedQty} units</dd>
+                        {/* We hold no sales data, so a quantity would be invented.
+                            The renderer prints an em dash rather than "null units". */}
+                        <dd className="font-semibold text-slate-900">
+                          {r.suggestedQty ? `${r.suggestedQty} units` : "—"}
+                        </dd>
                       </div>
                       <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                         <dt className="text-slate-500">Retail</dt>
@@ -949,12 +1053,18 @@ export function BusinessPage() {
                       </div>
                       <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                         <dt className="text-slate-500">Margin</dt>
-                        <dd className="font-semibold text-emerald-700">{r.marginPct}%</dd>
+                        {/* No cost data exists on the server, so there is no margin
+                            to calculate — "0%" would read as a calculation. */}
+                        <dd className="font-semibold text-emerald-700">
+                          {r.marginPct ? `${r.marginPct}%` : "—"}
+                        </dd>
                       </div>
                       <div className="rounded-lg bg-slate-50 px-2 py-1.5">
                         <dt className="text-slate-500">Traffic potential</dt>
+                        {/* Our own search volume for the term this product answers,
+                            or nothing when no tracked term matched it. */}
                         <dd className="font-semibold text-slate-900">
-                          {compact(r.trafficPotential)}/mo
+                          {r.trafficPotential ? `${compact(r.trafficPotential)}/mo` : "—"}
                         </dd>
                       </div>
                     </dl>
@@ -970,7 +1080,7 @@ export function BusinessPage() {
                           void actionToast(() => actions.toggleBuyList(r.id, !added), {
                             success: added
                               ? `${r.product} removed from the buy list.`
-                              : `${r.product} added to the buy list (${r.suggestedQty} units).`,
+                              : `${r.product} added to the buy list.`,
                             failure: "The buy list could not be updated.",
                           });
                         }}

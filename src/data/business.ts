@@ -72,12 +72,14 @@ export const topSeoKeywords: RankRow[] = [
 ];
 
 export const topGeoKeywords: GeoRankRow[] = [
-  { prompt: "where to buy velvet lip kits online", engine: "ChatGPT", position: 2, change: 3 },
-  { prompt: "recommend a hydrating serum under $20", engine: "ChatGPT", position: 4, change: 1 },
-  { prompt: "best value phone under $300", engine: "Perplexity", position: 6, change: 4 },
-  { prompt: "cheapest 65w gan charger retailer", engine: "Google AI Overview", position: 5, change: 2 },
-  { prompt: "affordable makeup bundle brands", engine: "ChatGPT", position: 8, change: 5 },
-  { prompt: "linen dress shops with fast delivery", engine: "Google AI Overview", position: 11, change: -1 },
+  // 0 in `position` is "the answer did not mention us"; anything higher is the place
+  // among the sources it listed. See `GeoRankRow`.
+  { prompt: "where to buy velvet lip kits online", engine: "Google AI Overview", position: 2, sources: 5 },
+  { prompt: "recommend a hydrating serum under $20", engine: "Google AI Overview", position: 1, sources: 6 },
+  { prompt: "best value phone under $300", engine: "Google AI Overview", position: 4, sources: 8 },
+  { prompt: "cheapest 65w gan charger retailer", engine: "Google AI Overview", position: 0, sources: 4 },
+  { prompt: "affordable makeup bundle brands", engine: "Google AI Overview", position: 3, sources: 7 },
+  { prompt: "linen dress shops with fast delivery", engine: "Google AI Overview", position: 0, sources: 5 },
 ];
 
 export const geoVisibility: TrafficPoint[] = [

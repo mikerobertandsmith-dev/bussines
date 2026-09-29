@@ -6,7 +6,39 @@
     <title>Market Watch · Supplier &amp; Competitor Monitoring</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      Placeholder until React mounts: `createRoot().render()` replaces it on the
+      first commit.
+
+      Without it, a bundle that never executes — a module that fails to load, a
+      blocked request, a syntax error in the entry — leaves an empty `#root` and
+      a completely white page, which is indistinguishable from an app that loaded
+      and rendered nothing. This says which of the two happened.
+    -->
+    <div id="root">
+      <div
+        style="
+          display: flex;
+          min-height: 100vh;
+          align-items: center;
+          justify-content: center;
+          padding: 1rem;
+          font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+          color: #475569;
+          background: #f8fafc;
+        "
+      >
+        <div style="max-width: 32rem; text-align: center">
+          <p style="margin: 0 0 0.5rem; font-size: 0.875rem; font-weight: 600; color: #0f172a">
+            Loading Market Watch…
+          </p>
+          <p style="margin: 0; font-size: 0.75rem">
+            If this message stays on screen, the app's JavaScript did not start. Open the browser
+            console for the error.
+          </p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

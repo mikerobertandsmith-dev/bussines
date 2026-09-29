@@ -9,9 +9,9 @@ import { readSpend, spendMessage } from "../_shared/budget.ts";
 import {
   catalogueKey,
   catalogueUrl,
-  nextScanAt,
   normaliseCatalogue,
   safeStockState,
+  sourceSettlement,
   siteActorHint,
   siteActorId,
   siteCaps,
@@ -36,10 +36,11 @@ import {
  *
  * One handler serves both targets, because the two differ only in which table the
  * source lives in and which table the products land in — and both are read by the
- * same actor: the website crawler this deployment already has
- * (`APIFY_CONTACTS_ACTOR_ID`), or a dedicated catalogue actor when
- * `APIFY_SITE_ACTOR_ID` is set. A supplier and a competitor are the same thing to
- * a site read — a business with a website — so this asks for no secret of its own.
+ * same actor, `APIFY_SITE_ACTOR_ID`: a product-catalogue actor, because a supplier
+ * and a competitor are the same thing to a site read (a business with a website).
+ * It does need that secret. The fallback to `APIFY_CONTACTS_ACTOR_ID` still starts a
+ * run, but that actor returns contact details and no product rows, so the scan bills,
+ * reports success and writes nothing — see `_shared/site.ts` for the measurement.
  *
  * ## What a row in `*_items` means
  *
@@ -363,17 +364,19 @@ Deno.serve(async (req) => {
     const changes = ok ? await writeItems(scraped) : 0;
     const collectedAt = new Date().toISOString();
 
-    // `last_scan_at` moves only on a read that produced something, so a failed
-    // scan cannot make the page claim a fresh scan; `site_scan_at` records the
-    // attempt either way.
-    await patchSource({
-      site_run_id: null,
-      site_scan_at: collectedAt,
-      site_error: ok ? null : failureReason(run).slice(0, 300),
-      ...(ok
-        ? { last_scan_at: collectedAt, next_scan_at: nextScanAt(source.cadence) }
-        : {}),
-    });
+    // The patch is built by `_shared/site.ts`, which knows that the two source
+    // tables are not the same shape: a competitor has no `next_scan_at`, and this
+    // update is the one that settles the row — items are already written by now, so
+    // a rejected update would leave the catalogue in place and the run uncollected.
+    await patchSource(
+      sourceSettlement({
+        target,
+        ok,
+        cadence: source.cadence,
+        collectedAt,
+        error: failureReason(run).slice(0, 300),
+      }),
+    );
 
     await insertRun(run, ok, changes, collectedAt);
     await logUsage(run, website, scraped.length, changes, ok);

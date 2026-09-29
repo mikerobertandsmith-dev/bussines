@@ -122,7 +122,7 @@ describe("Market Watch app", () => {
     expect(text()).toContain("site scans ran");
 
     // The other two pages read the same workspace, so they are already current:
-    // a second pull inside the hour animates, then says so instead of re-scanning.
+    // a second pull inside the window animates, then says so instead of re-scanning.
     click(findByText("button", "Competition"));
     expect(container.querySelector('[aria-label^="Pull down to refresh"]')).not.toBeNull();
     pullToRefresh();
@@ -232,7 +232,10 @@ describe("Market Watch app", () => {
 
     click(findByText("button", "SEO & GEO"));
     expect(text()).toContain("Top ranking SEO keywords this week");
-    expect(text()).toContain("Top ranking GEO prompts this week");
+    // GEO is reported as cited / not cited, never as a position: an AI answer has no
+    // "position 5".
+    expect(text()).toContain("AI answers for your tracked terms");
+    expect(text()).toContain("Cited");
 
     click(findByText("button", "Buy list"));
     expect(text()).toContain("Inventory you should get next");

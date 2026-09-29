@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   Check,
   ChevronRight,
   Download,
@@ -10,6 +8,7 @@ import {
   PackageSearch,
   Pencil,
   Plus,
+  RefreshCw,
   Sparkles,
   Trash2,
   Truck,
@@ -30,37 +29,33 @@ import {
   Th,
   btnGhost,
   btnPrimary,
-  changeTone,
   inputClass,
 } from "../components/primitives";
-import { AreaChart } from "../components/charts";
 import { Modal } from "../components/Modal";
 import { useToast } from "../components/Toast";
 import { alertsFor } from "../lib/alerts";
+import { daysAgo, normaliseWebsite, relativeTime, shortDate } from "../lib/format";
 import {
-  daysAgo,
-  money,
-  normaliseWebsite,
-  relativeTime,
-  shortDate,
-  titleCase,
-} from "../lib/format";
+  readSetSummary,
+  readStateCopy,
+  readStateOf,
+  readStateTone,
+  type SourceReadState,
+} from "../lib/reads";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
-import type {
-  Cadence,
-  ChangeType,
-  Supplier,
-  SupplierInput,
-  SupplierItem,
-  TrafficPoint,
-} from "../lib/types";
+import type { Cadence, ChangeType, Supplier, SupplierInput, SupplierItem } from "../lib/types";
 
+/**
+ * The kinds of supplier change this page reports.
+ *
+ * Only listings are shown here. Price moves, stock moves and supplier promotions
+ * were removed: nothing we read publishes a comparable buy price or a stock level
+ * from those sources, so the tabs, the columns behind them and the price-drop
+ * trend above them described movements we could never actually observe.
+ */
 const CHANGE_TABS: { value: ChangeType | "all"; label: string }[] = [
   { value: "all", label: "All" },
   { value: "new_product", label: "New products" },
-  { value: "price_change", label: "Price moves" },
-  { value: "stock_change", label: "Stock moves" },
-  { value: "promotion", label: "Promotions" },
 ];
 
 const RANGE_TABS = [
@@ -74,31 +69,6 @@ const CADENCE_OPTIONS: { value: Cadence; label: string }[] = [
   { value: "weekly", label: "Weekly" },
   { value: "monthly", label: "Monthly" },
 ];
-
-/** The next step we would recommend for a detected change. */
-function actionFor(item: SupplierItem): string {
-  const drop = ((item.previousPrice - item.price) / item.previousPrice) * 100;
-  switch (item.change) {
-    case "price_change":
-      return drop > 4
-        ? `Cut retail to match — margin at ${money(item.price)} still clears target`
-        : drop < 0
-          ? "Buy price rose — review retail price or switch supplier"
-          : "Small price move — monitor for a week";
-    case "stock_change":
-      if (item.previousStock === "out_of_stock" && item.stock === "in_stock")
-        return "Back in stock — email waiting clients and refresh the listing";
-      if (item.stock === "out_of_stock") return "Out of stock — pause ads for this SKU";
-      if (item.stock === "low_stock") return "Low stock — order now before lead time bites";
-      return "Preorder open — open a preorder page";
-    case "new_product":
-      return "New SKU — brief a product shoot and an original ad";
-    case "promotion":
-      return "Supplier promo — build a matching campaign before it ends";
-    default:
-      return "Delisted — remove from catalogue";
-  }
-}
 
 /**
  * What removing a supplier takes with it, counted from what is on screen.
@@ -116,13 +86,6 @@ function supplierRemovalNote(supplier: Supplier | null, detected: number): strin
   return `This also deletes the ${detected} detected product${
     detected === 1 ? "" : "s"
   } we hold from them. Your own catalogue and ad briefs stay — they just lose the supplier link.`;
-}
-
-function priceDelta(item: SupplierItem) {
-  if (item.previousPrice === item.price) return null;
-  const diff = item.price - item.previousPrice;
-  const pct = (diff / item.previousPrice) * 100;
-  return { diff, pct, down: diff < 0 };
 }
 
 export function SuppliersPage() {
@@ -152,6 +115,8 @@ export function SuppliersPage() {
   const [saving, setSaving] = useState(false);
   const [confirmTarget, setConfirmTarget] = useState<Supplier | null>(null);
   const [removing, setRemoving] = useState(false);
+  /** The supplier whose catalogue is being read on demand right now. */
+  const [readingId, setReadingId] = useState<string | null>(null);
 
   const editing = formTarget && formTarget !== "new" ? formTarget : null;
   /** How many catalogue items the supplier awaiting confirmation is responsible for. */
@@ -178,26 +143,31 @@ export function SuppliersPage() {
     [items, change, supplierId, range, query],
   );
 
-  const priceDrops = items.filter((i) => i.change === "price_change" && i.price < i.previousPrice);
   const newProducts = items.filter((i) => i.change === "new_product");
 
-  /** How many price drops landed on each of the last seven days. */
-  const priceDropTrend = useMemo<TrafficPoint[]>(() => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    return Array.from({ length: 7 }, (_, index) => {
-      const day = new Date(start);
-      day.setDate(day.getDate() - (6 - index));
-      const next = new Date(day);
-      next.setDate(next.getDate() + 1);
-      const count = items.filter((i) => {
-        if (i.change !== "price_change" || i.price >= i.previousPrice) return false;
-        const at = new Date(i.detectedAt).getTime();
-        return at >= day.getTime() && at < next.getTime();
-      }).length;
-      return { label: day.toLocaleDateString(undefined, { weekday: "short" }), visits: count };
-    });
-  }, [items]);
+  /**
+   * What each watched site's last read did, and the page's own headline for it.
+   *
+   * The change table below can only ever show *products*, and every supplier here
+   * publishes none — so without this the whole page reads as broken rather than as
+   * "read, and their site has no catalogue". Drafted from fields we already hold;
+   * see `lib/reads.ts`.
+   */
+  const reads = suppliers.map((supplier) => {
+    const itemCount = items.filter((i) => i.supplierId === supplier.id).length;
+    const signals = {
+      siteScanPending: supplier.siteScanPending,
+      siteError: supplier.siteError,
+      siteScanAt: supplier.siteScanAt,
+      itemCount,
+    };
+    const state = readStateOf(signals);
+    return { supplier, state, itemCount, copy: readStateCopy(state, signals) };
+  });
+  const readStates: SourceReadState[] = reads.map((entry) => entry.state);
+  const readingNow = reads.filter((entry) => entry.state === "pending").length;
+  /** How many watched sites actually publish a catalogue we can read. */
+  const readableCount = reads.filter((entry) => entry.state === "listed").length;
 
   /** The cadence shown when every supplier shares one, otherwise the busiest. */
   const sharedCadence: Cadence =
@@ -296,6 +266,46 @@ export function SuppliersPage() {
     }
   }
 
+  /**
+   * Reads one supplier's site now, instead of waiting for the next pull.
+   *
+   * Worth having as its own control because the answer for most of the sources
+   * this app watches is "no catalogue published", and that is only convincing when
+   * the user can make us read again and watch it come back the same way. The reply
+   * is reported as it is: a run still going says so rather than claiming a result.
+   */
+  async function readNow(supplier: Supplier) {
+    setReadingId(supplier.id);
+    try {
+      const result = await actions.scanSupplierSite(supplier.id);
+      if (!result) {
+        toast("Reading a catalogue needs a live workspace.");
+        return;
+      }
+      if (result.status === "unavailable") {
+        toast(result.reason ?? "Catalogue reading is not configured on the server.");
+        return;
+      }
+      if (result.status === "running") {
+        toast(`${supplier.name}: still reading — the result is collected on the next refresh.`);
+        return;
+      }
+      if (result.status === "failed") {
+        toast(result.reason ?? `${supplier.name} could not be read.`);
+        return;
+      }
+      toast(
+        result.items
+          ? `${supplier.name}: read ${result.items} products, ${result.changes} new.`
+          : `${supplier.name} was read cleanly — their site publishes no product catalogue.`,
+      );
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : "That catalogue could not be read.");
+    } finally {
+      setReadingId(null);
+    }
+  }
+
   function exportCsv() {
     const header = [
       "supplier",
@@ -303,10 +313,6 @@ export function SuppliersPage() {
       "sku",
       "category",
       "change",
-      "price",
-      "previous_price",
-      "stock",
-      "previous_stock",
       "detected_at",
       "moq",
       "lead_time_days",
@@ -320,10 +326,6 @@ export function SuppliersPage() {
         item.sku,
         item.category,
         item.change,
-        item.price,
-        item.previousPrice,
-        item.stock,
-        item.previousStock,
         item.detectedAt,
         item.moq,
         item.leadTimeDays,
@@ -342,12 +344,10 @@ export function SuppliersPage() {
     toast(`Exported ${filtered.length} supplier changes to CSV.`);
   }
 
-  const detailDelta = openItem ? priceDelta(openItem) : null;
-
   return (
     <div className="space-y-5">
-      {/* Summary first: the count of sites, what's new, then the price-drop trend. */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {/* Summary first: how many sites are watched, and what they listed since the last read. */}
+      <div className="grid gap-3 sm:grid-cols-2">
         <Stat
           label="Suppliers monitored"
           value={suppliers.length}
@@ -358,32 +358,16 @@ export function SuppliersPage() {
           label="New items this cycle"
           value={newProducts.length}
           icon={<Sparkles size={16} />}
-          hint="listed since the last scan"
+          // Names the usual reason a watched set has produced nothing, rather than
+          // leaving a 0 that reads as a failed scan.
+          hint={
+            readableCount
+              ? "listed since the last scan"
+              : suppliers.length
+                ? "no watched site publishes a product catalogue"
+                : "add a supplier site to start"
+          }
         />
-        <Card className="p-4 sm:col-span-2">
-          <div className="flex items-start justify-between gap-2">
-            <p className="text-xs font-medium tracking-wide text-slate-500 uppercase">
-              Price drops
-            </p>
-            <span className="text-slate-400">
-              <ArrowDownRight size={16} />
-            </span>
-          </div>
-          <div className="mt-2 flex items-baseline gap-2">
-            <p className="text-2xl font-semibold tracking-tight text-slate-900">
-              {priceDrops.length}
-            </p>
-            <span className="text-xs text-slate-500">buy price lower than last scan · last 7 days</span>
-          </div>
-          <div className="mt-2">
-            <AreaChart
-              data={priceDropTrend}
-              color="#059669"
-              valueFormat={(n) => `${n} drop${n === 1 ? "" : "s"}`}
-              height={92}
-            />
-          </div>
-        </Card>
       </div>
 
       {alerts.length ? (
@@ -451,6 +435,78 @@ export function SuppliersPage() {
         </div>
       </Card>
 
+      {/*
+        What each read did.
+
+        This exists because the change table below can only ever show *products*,
+        and every supplier watched here publishes none — so without it the page has
+        one number for a read (how many changes came back) and that number is always
+        zero, which is indistinguishable from a scan that never happens. "Read, and
+        their site has no catalogue" is a finding and belongs on the page.
+      */}
+      <Card>
+        <CardHead
+          icon={<RefreshCw size={16} />}
+          title="Catalogue reads"
+          subtitle={
+            suppliers.length
+              ? readSetSummary(readStates)
+              : "Nothing is being watched yet, so no site is being read."
+          }
+          action={
+            readingNow ? <Badge tone="brand">{readingNow} reading now</Badge> : undefined
+          }
+        />
+        {suppliers.length === 0 ? (
+          <EmptyState
+            title="No supplier sites yet"
+            hint="Add the sites you buy from and each one is checked for a product catalogue on the cadence you choose."
+            action={
+              <button type="button" className={btnPrimary} onClick={openAddSupplier}>
+                <Plus size={13} /> Add supplier
+              </button>
+            }
+          />
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {reads.map(({ supplier, state, itemCount, copy }) => (
+              <li
+                key={supplier.id}
+                className="flex flex-wrap items-start gap-3 px-4 py-3 sm:flex-nowrap"
+              >
+                <SiteLogo website={supplier.website} name={supplier.name} size={26} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="truncate text-sm font-medium text-slate-900">
+                      {supplier.name}
+                    </span>
+                    <Badge tone={readStateTone(state)}>{copy.label}</Badge>
+                  </span>
+                  <span className="mt-0.5 block text-[11px] text-slate-600">{copy.detail}</span>
+                  <span className="mt-0.5 block text-[11px] text-slate-400">
+                    read {supplier.siteScanAt ? relativeTime(supplier.siteScanAt) : "never"} ·
+                    next {relativeTime(supplier.nextScan)} · {supplier.cadence} · {itemCount}{" "}
+                    item{itemCount === 1 ? "" : "s"} held
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className={btnGhost}
+                  onClick={() => void readNow(supplier)}
+                  disabled={readingId === supplier.id || state === "pending"}
+                >
+                  <RefreshCw
+                    size={13}
+                    className={readingId === supplier.id ? "animate-spin" : ""}
+                  />
+                  {readingId === supplier.id ? "Reading…" : "Read now"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+
       <Card>
           <CardHead
             icon={<PackageSearch size={16} />}
@@ -494,12 +550,20 @@ export function SuppliersPage() {
           {suppliers.length === 0 ? (
             <EmptyState
               title="No suppliers yet"
-              hint="Add the supplier sites you buy from — their catalogues, prices and stock will be checked on the cadence you choose."
+              hint="Add the supplier sites you buy from — their catalogues are checked for new listings on the cadence you choose."
               action={
                 <button type="button" className={btnPrimary} onClick={openAddSupplier}>
                   <Plus size={13} /> Add supplier
                 </button>
               }
+            />
+          ) : filtered.length === 0 && items.length === 0 ? (
+            // Nothing has ever been read from any of them, so "no changes in this
+            // window" would be answering a question nobody asked — the filters are
+            // not what is empty, the sources are.
+            <EmptyState
+              title="No supplier products on file"
+              hint={`${readSetSummary(readStates)} Products appear here only when a read finds one, and a site with no catalogue never will. Use “Read now” above to check any supplier yourself.`}
             />
           ) : filtered.length === 0 ? (
             <EmptyState
@@ -513,9 +577,6 @@ export function SuppliersPage() {
                   <tr>
                     <Th>Product</Th>
                     <Th>Supplier</Th>
-                    <Th>Change</Th>
-                    <Th className="text-right">Buy price</Th>
-                    <Th>Stock</Th>
                     <Th>Detected</Th>
                     <Th />
                   </tr>
@@ -523,7 +584,6 @@ export function SuppliersPage() {
                 <tbody className="divide-y divide-slate-100">
                   {filtered.map((item) => {
                     const supplier = suppliers.find((s) => s.id === item.supplierId);
-                    const delta = priceDelta(item);
                     return (
                       <tr
                         key={item.id}
@@ -551,33 +611,6 @@ export function SuppliersPage() {
                                 Lead time {item.leadTimeDays}d
                               </span>
                             </span>
-                          </span>
-                        </Td>
-                        <Td>
-                          <Badge tone={changeTone[item.change]}>{titleCase(item.change)}</Badge>
-                        </Td>
-                        <Td className="text-right">
-                          <span className="block font-semibold text-slate-900">
-                            {money(item.price)}
-                          </span>
-                          {delta ? (
-                            <span
-                              className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${
-                                delta.down ? "text-emerald-600" : "text-rose-600"
-                              }`}
-                            >
-                              {delta.down ? <ArrowDownRight size={12} /> : <ArrowUpRight size={12} />}
-                              {Math.abs(delta.pct).toFixed(1)}%
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-slate-400">unchanged</span>
-                          )}
-                        </Td>
-                        <Td>
-                          <span className="block text-xs text-slate-700">
-                            {item.stock === item.previousStock
-                              ? titleCase(item.stock)
-                              : `${titleCase(item.previousStock)} → ${titleCase(item.stock)}`}
                           </span>
                         </Td>
                         <Td>
@@ -632,35 +665,13 @@ export function SuppliersPage() {
       >
         {openItem ? (
           <div className="space-y-4 px-4 py-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge tone={changeTone[openItem.change]}>{titleCase(openItem.change)}</Badge>
-              <Badge tone={openItem.stock === "out_of_stock" ? "bad" : "neutral"}>
-                {titleCase(openItem.stock)}
-              </Badge>
-              <span className="text-[11px] text-slate-500">
-                detected {relativeTime(openItem.detectedAt)} · {shortDate(openItem.detectedAt)}
-              </span>
-            </div>
+            <span className="text-[11px] text-slate-500">
+              detected {relativeTime(openItem.detectedAt)} · {shortDate(openItem.detectedAt)}
+            </span>
 
             <dl className="grid gap-2 sm:grid-cols-2">
               <Detail label="Supplier">
                 {suppliers.find((s) => s.id === openItem.supplierId)?.name ?? "—"}
-              </Detail>
-              <Detail label="Buy price">{money(openItem.price)}</Detail>
-              <Detail label="Previous price">
-                {money(openItem.previousPrice)}
-                {detailDelta ? (
-                  <span className={detailDelta.down ? "text-emerald-700" : "text-rose-700"}>
-                    {" "}
-                    ({detailDelta.down ? "" : "+"}
-                    {detailDelta.pct.toFixed(1)}%)
-                  </span>
-                ) : null}
-              </Detail>
-              <Detail label="Stock movement">
-                {openItem.previousStock === openItem.stock
-                  ? titleCase(openItem.stock)
-                  : `${titleCase(openItem.previousStock)} → ${titleCase(openItem.stock)}`}
               </Detail>
               <Detail label="Lead time">{openItem.leadTimeDays} days</Detail>
               <Detail label="Minimum order">{openItem.moq} units</Detail>
@@ -671,11 +682,6 @@ export function SuppliersPage() {
                 {openItem.note}
               </p>
             ) : null}
-
-            <div className="rounded-lg border border-slate-200 px-3 py-2.5">
-              <p className="text-[10px] tracking-wide text-slate-500 uppercase">Suggested action</p>
-              <p className="mt-1 text-xs text-slate-700">{actionFor(openItem)}</p>
-            </div>
           </div>
         ) : null}
       </Modal>
@@ -688,7 +694,7 @@ export function SuppliersPage() {
         subtitle={
           editing
             ? "Changes apply from the next scan — what we already detected stays attached."
-            : "We check their catalogue, prices and stock on the cadence you pick."
+            : "We check their catalogue for new listings on the cadence you pick."
         }
         icon={<Truck size={16} />}
         footer={
