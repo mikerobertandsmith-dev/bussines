@@ -27,6 +27,7 @@ _shared/
   keywords.ts        shared keyword resolution for the SerpApi functions (Phase 1)
   apify.ts           Apify client, platform catalogue + post normaliser (Phase 2)
   contacts.ts        Apify website-contacts client: actor id, caps, input, normaliser
+  site.ts            Apify website-catalogue client: actor id, caps, input, product normaliser
   reviews.ts         review readers (SerpApi + Apify), normaliser, reply gate (Phase 3)
   mallary.ts         Mallary client: media upload, post creation, job status (Phase 4)
   llm.ts             OpenAI-compatible JSON client for the AI drafting tasks (Phase 5)
@@ -42,6 +43,8 @@ social-scan/
   index.ts           competitors' recent public posts (Apify), spend-capped per run
 web-contacts-scan/
   index.ts           reads a competitor's own site (Apify) and *proposes* its social profiles
+site-scan/
+  index.ts           reads a watched supplier's / competitor's own catalogue and writes what changed
 reviews-sync/
   index.ts           pulls each connected review profile into `my_reviews` (SerpApi/Apify)
 review-reply/
@@ -97,6 +100,11 @@ supabase secrets set \
   APIFY_CONTACTS_ENRICH_PROFILES=false \
   APIFY_CONTACTS_PREVIEW_MAX_PER_HOUR=10 \
   APIFY_CONTACTS_REUSE_WINDOW_MINUTES=2 \
+  APIFY_SITE_ACTOR_ID=... \
+  APIFY_SITE_MAX_PAGES=25 \
+  APIFY_SITE_MAX_CHARGE_USD=1 \
+  APIFY_SITE_RUN_TIMEOUT_SECS=120 \
+  APIFY_SITE_MAX_ITEMS=200 \
   APIFY_TRUSTPILOT_REVIEWS_ACTOR_ID=... \
   APIFY_YELP_REVIEWS_ACTOR_ID=... \
   APIFY_G2_REVIEWS_ACTOR_ID=... \
@@ -153,6 +161,20 @@ and it is deliberately a *separate* setting to `APIFY_MAX_CHARGE_USD`'s `$0.25`.
 `PAY_PER_EVENT` actor, so `APIFY_MAX_ITEMS` does not bound it: the page ceiling
 (`APIFY_CONTACTS_MAX_PAGES`) and the dollars are the real guards.
 
+`site-scan` reads a watched supplier's or competitor's **own catalogue**, and is what the pull-to-refresh
+gesture on Suppliers and Competition runs. It needs no secret of its own: a supplier's site and a
+competitor's site are the same thing to this read — a business with a website — so it runs the website
+actor the deployment already has, `APIFY_CONTACTS_ACTOR_ID` (the crawler behind competitor discovery),
+and each page therefore reports itself configured for free. `APIFY_SITE_ACTOR_ID` is an optional
+override: set it once to hand the read a dedicated product-catalogue actor instead of that crawler.
+Only a deployment with no website actor at all reports the feature as off.
+`APIFY_SITE_MAX_CHARGE_USD` deliberately does *not* reuse `APIFY_MAX_CHARGE_USD`'s `$0.25`: that value
+was chosen for a per-result social scrape, and a page-crawling actor's own floor can sit above it,
+where Apify refuses the run outright (`max-total-charge-usd-below-minimum`) — a refusal, not a tighter
+cap. Raise it above the configured actor's floor. `APIFY_SITE_MAX_PAGES` is the reach (product listings
+are paginated, so a crawl has to follow links); `APIFY_SITE_MAX_ITEMS` bounds the rows kept from one
+read; `APIFY_SITE_RUN_TIMEOUT_SECS` is Apify's own kill switch.
+
 `GROQ_API_KEY` switches on AI drafting. It is the only drafting variable that has to be set: the
 endpoint defaults to Groq's OpenAI-compatible API and the model to `openai/gpt-oss-120b` (Groq's
 production-tier 120B model — note that the widely-quoted `llama-3.3-70b-versatile` is now
@@ -184,6 +206,7 @@ supabase functions deploy serp-competitors --no-verify-jwt
 supabase functions deploy keyword-ideas --no-verify-jwt
 supabase functions deploy social-scan --no-verify-jwt
 supabase functions deploy web-contacts-scan --no-verify-jwt
+supabase functions deploy site-scan --no-verify-jwt
 supabase functions deploy reviews-sync --no-verify-jwt
 supabase functions deploy review-reply --no-verify-jwt
 # Inbound provider webhook — also fine without the platform JWT check.
@@ -224,6 +247,31 @@ secret is set.
   the residual gap is Phase 4 of `docs/SOURCE_MANAGEMENT_BLUEPRINT.md`. A contacts run that outlives
   the wait is collected from `competitors.contacts_run_id`, and its cost is logged once, at
   collection.
+- `serp-scan` also writes the workspace's **search visibility** back onto the business row: `seo_score`,
+  `top10_count`, `ranked_count` and `avg_position`, each with the `previous_*` twin the My Business
+  health card measures movement against, plus `rankings_checked_at`. The derivation is
+  `_shared/seo.ts` — bands of organic positions (top 3 / top 10 / top 20 / top 50), a capped credit
+  for a rich snippet, and one standing per tracked term from its desktop rows, which is the set the
+  SEO tab renders. It reads every standing the workspace holds rather than only the rows this run
+  wrote, so a run trimmed by the monthly budget does not report a smaller workspace as a worse one.
+  Those columns are the reason a score on the page is a scan result rather than whatever onboarding
+  typed; the migration that adds them is `0022`.
+- `site-scan` is the supplier/competitor catalogue read behind the Suppliers and Competition pages.
+  A row in `supplier_items` / `competitor_items` is a **change**, never a snapshot: `change` is the
+  enum those pages filter on ("New products", "Price moves", "Stock moves"), so a product read again
+  unchanged is not written at all. Writing it as `new_product` — the only value left over — would
+  relabel the whole catalogue as new on every scan, which is the signal the page exists to show. The
+  comparison is against the newest existing row per product, keyed by `sku` when the page publishes
+  one and the normalised name otherwise, derived on both sides by `_shared/site.ts`. A product that
+  disappears is deliberately *not* reported as `removed`: this is a bounded crawl, not an exhaustive
+  one, so absence proves nothing.
+- A crawl outlives one request, so `site-scan` holds the Apify run id on the source row
+  (`suppliers.site_run_id` / `competitors.site_run_id`, migration `0021`) and the next scan
+  **collects** that run instead of starting — and paying for — a second one. `last_scan_at` moves only
+  on a read that produced something, so a failed scan cannot make the page claim a fresh scan;
+  `site_scan_at` records the attempt either way. A run that hit its own timeout still had its dataset
+  fetched: a partial catalogue is a usable change feed, and the outcome is decided by whether products
+  came back rather than by the status alone.
 - `web-contacts-scan` keeps a ledger (`contacts_discovery_runs`, migration `0020`) because its
   guarantees are database facts rather than read-then-write hopes: a partial unique index permits one
   live **stored** run per competitor, so two concurrent clicks cannot both start one; the row is

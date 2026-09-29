@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Binoculars,
   Link2,
   MessageSquareQuote,
   Plus,
@@ -32,9 +31,9 @@ import { useActionToast, useToast } from "../components/Toast";
 import { platformLabel, summariseChannelSocial, summariseSocial } from "../lib/social";
 import { compact, relativeTime, shortDate } from "../lib/format";
 import { useWorkspace, useWorkspaceData } from "../lib/workspace";
-import type { Competitor, MyReview } from "../lib/types";
+import type { MyReview } from "../lib/types";
 
-type SocialTab = "reviews" | "competitors" | "social";
+type SocialTab = "reviews" | "social";
 
 /**
  * Platforms the connect form offers, in the order it lists them. Google and
@@ -47,14 +46,6 @@ const REVIEW_PLATFORMS = ["google", "yelp", "g2", "trustpilot", "capterra", "tri
 function deltaPct(current: number, previous: number): number {
   if (!previous) return 0;
   return Number((((current - previous) / previous) * 100).toFixed(1));
-}
-
-function sentimentCounts(competitor: Competitor) {
-  return {
-    positive: competitor.reviews.filter((r) => r.sentiment === "positive").length,
-    neutral: competitor.reviews.filter((r) => r.sentiment === "neutral").length,
-    negative: competitor.reviews.filter((r) => r.sentiment === "negative").length,
-  };
 }
 
 export function SocialPage() {
@@ -221,7 +212,6 @@ export function SocialPage() {
         onChange={setTab}
         options={[
           { value: "reviews", label: "My reviews", icon: <MessageSquareQuote size={13} />, count: reviewSources.length },
-          { value: "competitors", label: "Competitor reviews", icon: <Binoculars size={13} />, count: competitors.length },
           { value: "social", label: "Social media", icon: <Share2 size={13} />, count: socialScores.length },
         ]}
       />
@@ -396,119 +386,6 @@ export function SocialPage() {
                   ))}
                 </ul>
               )}
-            </div>
-          </Card>
-        </div>
-      ) : null}
-
-      {/* ------------------------------------------------ competitor reviews */}
-      {tab === "competitors" ? (
-        <div className="space-y-5">
-          <Card>
-            <CardHead
-              icon={<Binoculars size={16} />}
-              title="Competitor review brief"
-              subtitle="A quick read of every competitor's rating, sentiment mix and what their customers keep raising"
-            />
-            {competitors.length === 0 ? (
-              <EmptyState
-                title="No competitors tracked"
-                hint="Add competitor websites during setup to compare their reviews."
-              />
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {competitors.map((c) => {
-                  const counts = sentimentCounts(c);
-                  const total = c.reviews.length || 1;
-                  return (
-                    <div key={c.id} className="grid gap-4 px-4 py-4 lg:grid-cols-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold text-slate-900">{c.name}</p>
-                          <Badge tone={c.rating >= 4.3 ? "good" : c.rating >= 3.8 ? "warn" : "bad"}>
-                            {c.rating.toFixed(1)}
-                          </Badge>
-                        </div>
-                        <div className="mt-1 flex items-center gap-2">
-                          <Stars rating={c.rating} size={14} />
-                          <DeltaPill value={deltaPct(c.rating, c.previousRating)} suffix=" pts" />
-                        </div>
-                        <p className="mt-1 text-[11px] text-slate-500">
-                          {c.reviewCount.toLocaleString()} reviews · {c.reviewsThisMonth} new this
-                          month
-                        </p>
-                        {c.website ? (
-                          <a
-                            href={c.website}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-1 inline-block text-[11px] text-indigo-600 hover:underline"
-                          >
-                            {c.website}
-                          </a>
-                        ) : null}
-                      </div>
-
-                      <div>
-                        <p className="mb-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
-                          Sentiment on their reviews
-                        </p>
-                        <div className="space-y-1.5">
-                          {(
-                            [
-                              ["positive", "bg-emerald-500", counts.positive],
-                              ["neutral", "bg-amber-500", counts.neutral],
-                              ["negative", "bg-rose-500", counts.negative],
-                            ] as const
-                          ).map(([label, color, value]) => (
-                            <div key={label}>
-                              <div className="flex items-center justify-between text-[11px] text-slate-600">
-                                <span className="capitalize">{label}</span>
-                                <span className="font-medium text-slate-900">{value}</span>
-                              </div>
-                              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                                <div
-                                  className={`h-full rounded-full ${color}`}
-                                  style={{ width: `${(value / total) * 100}%` }}
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="mb-1.5 text-[11px] font-semibold tracking-wide text-slate-500 uppercase">
-                          Latest reviews
-                        </p>
-                        {c.reviews.length === 0 ? (
-                          <p className="text-[11px] text-slate-500">No reviews captured yet.</p>
-                        ) : (
-                          <ul className="space-y-2">
-                            {c.reviews.slice(0, 2).map((r) => (
-                              <li key={r.id} className="rounded-lg bg-slate-50 px-2.5 py-2">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="text-[11px] font-medium text-slate-700">
-                                    {r.author || "Customer"}
-                                  </span>
-                                  <Stars rating={r.rating} size={11} />
-                                </div>
-                                <p className="mt-0.5 line-clamp-2 text-[11px] text-slate-600">
-                                  {r.text}
-                                </p>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
-              Use these gaps as ad angles — a complaint your competitors get is a promise your next
-              promotion can make.
             </div>
           </Card>
         </div>

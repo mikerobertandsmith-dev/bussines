@@ -31,7 +31,6 @@ import {
   loadWorkspace,
   logSentMessages,
   markReviewScanComplete,
-  queueScan,
   removeBuyListItem,
   saveKeywordIdea as saveTrackedKeyword,
   saveMailAccountRow,
@@ -58,6 +57,7 @@ import {
   type ReplyDraftResult,
   type ReviewSyncResult,
   type SerpScanResult,
+  type SiteScanResult,
   type SocialAccountsResult,
   type SocialScanResult,
 } from "./integrations";
@@ -241,9 +241,15 @@ function withoutSupplier(data: WorkspaceData, supplierId: string): WorkspaceData
 
 export interface WorkspaceActions {
   setSupplierCadence: (supplierId: string, cadence: Cadence) => Promise<void>;
-  scanSupplier: (supplierId: string) => Promise<void>;
+  /**
+   * Reads a watched supplier's own site catalogue through `site-scan` and writes
+   * whatever changed. Resolves with the gateway's summary (null in demo mode,
+   * where there is no actor to point at a site).
+   */
+  scanSupplierSite: (supplierId: string) => Promise<SiteScanResult | null>;
   setCompetitorCadence: (competitorId: string, cadence: Cadence) => Promise<void>;
-  scanCompetitor: (competitorId: string) => Promise<void>;
+  /** The same read for a competitor's own shopfront. */
+  scanCompetitorSite: (competitorId: string) => Promise<SiteScanResult | null>;
   /**
    * Adds a competitor to the watched list. Resolves with the created source so the
    * page can select it straight away.
@@ -444,7 +450,12 @@ export interface WorkspaceContextValue {
   error: string | null;
   needsOnboarding: boolean;
   mode: "demo" | "live";
-  refresh: () => Promise<void>;
+  /**
+   * Re-reads the workspace. `silent` leaves the current screens mounted while it
+   * runs, which is what lets a page keep showing the version it already has until
+   * the new one lands instead of dropping back to the loading screen.
+   */
+  refresh: (options?: { silent?: boolean }) => Promise<void>;
   completeOnboarding: (input: OnboardingInput) => Promise<void>;
   actions: WorkspaceActions;
 }
@@ -489,7 +500,10 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
           suppliers: current.suppliers.map((s) => (s.id === supplierId ? { ...s, cadence } : s)),
         }));
       },
-      async scanSupplier(supplierId) {
+      async scanSupplierSite(supplierId) {
+        // No actor credentials in demo mode, so the read is the local timestamp a
+        // real scan would write to `last_scan_at` — without the spend, and with
+        // nothing invented: the sample items already stand in for a catalogue.
         const now = new Date().toISOString();
         patchData((current) => ({
           ...current,
@@ -497,6 +511,7 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
             s.id === supplierId ? { ...s, lastScan: now } : s,
           ),
         }));
+        return null;
       },
       async setCompetitorCadence(competitorId, cadence) {
         patchData((current) => ({
@@ -504,7 +519,7 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
           competitors: current.competitors.map((c) => (c.id === competitorId ? { ...c, cadence } : c)),
         }));
       },
-      async scanCompetitor(competitorId) {
+      async scanCompetitorSite(competitorId) {
         const now = new Date().toISOString();
         patchData((current) => ({
           ...current,
@@ -512,6 +527,7 @@ function DemoWorkspaceProvider({ children }: { children: ReactNode }) {
             c.id === competitorId ? { ...c, lastScan: now } : c,
           ),
         }));
+        return null;
       },
       async addCompetitor(input) {
         const created = demoCompetitor(input);
@@ -999,10 +1015,13 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
 
   const email = user?.primaryEmailAddress?.emailAddress ?? "";
 
-  const bootstrap = useCallback(async () => {
+  const bootstrap = useCallback(async (options?: { silent?: boolean }) => {
     if (!userId) return;
-    setLoading(true);
-    setError(null);
+    const silent = options?.silent ?? false;
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
     try {
       if (!dbEnabled) {
         // Auth without a database: sign in works, data stays sample.
@@ -1018,9 +1037,14 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         setData(null);
       }
     } catch (cause) {
+      // A silent reload belongs to its caller: the screens are still on show, so
+      // there is no error panel to put this in, and the pull reports it itself.
+      if (silent) {
+        throw cause instanceof Error ? cause : new Error("Your workspace could not be reloaded.");
+      }
       setError(cause instanceof Error ? cause.message : "Could not load your workspace.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [userId]);
 
@@ -1065,6 +1089,26 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
     setData((current) => (current ? updater(current) : current));
   }, []);
 
+  /**
+   * One catalogue read against `site-scan`.
+   *
+   * Deliberately reloads nothing: a pull runs one of these per watched source, so
+   * reloading the workspace after each would be N full reads for a single gesture.
+   * The pull re-reads once, after every scan has settled — and a failure is left to
+   * propagate, because the pull counts it rather than swallowing it here.
+   */
+  const scanSite = useCallback(
+    async (target: "supplier" | "competitor", sourceId: string): Promise<SiteScanResult | null> => {
+      if (!dbEnabled || !profile) return null;
+      return await invokeGateway<SiteScanResult>("site-scan", {
+        businessId: profile.id,
+        target,
+        sourceId,
+      });
+    },
+    [profile],
+  );
+
   const actions = useMemo<WorkspaceActions>(
     () => ({
       async setSupplierCadence(supplierId, cadence) {
@@ -1074,24 +1118,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         }));
         if (dbEnabled) await withBusiness(() => setSupplierCadence(supplierId, cadence));
       },
-      async scanSupplier(supplierId) {
-        const supplier = data?.suppliers.find((s) => s.id === supplierId);
-        const now = new Date().toISOString();
-        patchData((current) => ({
-          ...current,
-          suppliers: current.suppliers.map((s) => (s.id === supplierId ? { ...s, lastScan: now } : s)),
-        }));
-        if (dbEnabled) {
-          await withBusiness(async (business) => {
-            const run = await queueScan({
-              businessId: business.id,
-              sourceType: "supplier",
-              sourceId: supplierId,
-              sourceName: supplier?.name ?? "Supplier",
-            });
-            patchData((current) => ({ ...current, scanRuns: [run, ...current.scanRuns] }));
-          });
-        }
+      async scanSupplierSite(supplierId) {
+        return await scanSite("supplier", supplierId);
       },
       async setCompetitorCadence(competitorId, cadence) {
         patchData((current) => ({
@@ -1100,26 +1128,8 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         }));
         if (dbEnabled) await withBusiness(() => setCompetitorCadence(competitorId, cadence));
       },
-      async scanCompetitor(competitorId) {
-        const competitor = data?.competitors.find((c) => c.id === competitorId);
-        const now = new Date().toISOString();
-        patchData((current) => ({
-          ...current,
-          competitors: current.competitors.map((c) =>
-            c.id === competitorId ? { ...c, lastScan: now } : c,
-          ),
-        }));
-        if (dbEnabled) {
-          await withBusiness(async (business) => {
-            const run = await queueScan({
-              businessId: business.id,
-              sourceType: "competitor",
-              sourceId: competitorId,
-              sourceName: competitor?.name ?? "Competitor",
-            });
-            patchData((current) => ({ ...current, scanRuns: [run, ...current.scanRuns] }));
-          });
-        }
+      async scanCompetitorSite(competitorId) {
+        return await scanSite("competitor", competitorId);
       },
       async addCompetitor(input) {
         // Without a database (signed in, keys absent) the sample workspace is
@@ -1403,7 +1413,10 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           const result = await invokeGateway<SerpScanResult>("serp-scan", {
             businessId: profile.id,
           });
-          await bootstrap();
+          // Silent: the caller shows its own spinner, and blanking the whole app to
+          // a loading screen would throw away what the user is reading before the
+          // new data has even arrived.
+          await bootstrap({ silent: true });
           return result ?? null;
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "The search scan could not be run.");
@@ -1416,7 +1429,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
           const result = await invokeGateway<CompetitorBenchmarkResult>("serp-competitors", {
             businessId: profile.id,
           });
-          await bootstrap();
+          await bootstrap({ silent: true });
           return result ?? null;
         } catch (cause) {
           setError(
@@ -1434,7 +1447,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
             businessId: profile.id,
             force: true,
           });
-          await bootstrap();
+          await bootstrap({ silent: true });
           return result ?? null;
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "The social scan could not be run.");
@@ -1720,7 +1733,7 @@ function LiveWorkspaceProvider({ children }: { children: ReactNode }) {
         if (dbEnabled) await withBusiness(() => deletePromotionBrief(briefId));
       },
     }),
-    [data, patchData, withBusiness, userId, profile, bootstrap],
+    [data, patchData, withBusiness, scanSite, userId, profile, bootstrap],
   );
 
   const value = useMemo<WorkspaceContextValue>(

@@ -441,9 +441,13 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
       newItems: related(itemRows).map<CompetitorItem>((i) => ({
         id: i.id,
         product: str(i.product),
+        sku: str(i.sku),
         category: str(i.category),
         price: num(i.price),
+        previousPrice: num(i.previous_price, num(i.price)),
         stock: (i.stock ?? "in_stock") as CompetitorItem["stock"],
+        previousStock: (i.previous_stock ?? "in_stock") as CompetitorItem["stock"],
+        change: (i.change ?? "new_product") as CompetitorItem["change"],
         detectedAt: str(i.detected_at, new Date().toISOString()),
         url: str(i.url),
       })),
@@ -976,53 +980,6 @@ export async function saveCompetitorSocialHandles(
   if (error) throw new Error(error.message);
 
   return ((data ?? []) as Row[]).map(mapSocialChannel);
-}
-
-/** Queues a scan. The scheduled job picks this up and writes the results. */
-export async function queueScan(params: {
-  businessId: string;
-  sourceType: ScanRun["sourceType"];
-  sourceId?: string | null;
-  sourceName: string;
-}): Promise<ScanRun> {
-  const db = requireSupabase();
-  const { data, error } = await db
-    .from("scan_runs")
-    .insert({
-      business_id: params.businessId,
-      source_type: params.sourceType,
-      source_id: params.sourceId ?? null,
-      source_name: params.sourceName,
-      status: "queued",
-    })
-    .select()
-    .single();
-  if (error || !data) throw new Error(error?.message ?? "Could not queue the scan.");
-
-  if (params.sourceType === "supplier" && params.sourceId) {
-    await db
-      .from("suppliers")
-      .update({ last_scan_at: new Date().toISOString() })
-      .eq("id", params.sourceId);
-  }
-  if (params.sourceType === "competitor" && params.sourceId) {
-    await db
-      .from("competitors")
-      .update({ last_scan_at: new Date().toISOString() })
-      .eq("id", params.sourceId);
-  }
-
-  return {
-    id: data.id,
-    sourceType: data.source_type,
-    sourceId: data.source_id,
-    sourceName: data.source_name,
-    status: data.status,
-    changesFound: num(data.changes_found),
-    error: null,
-    startedAt: data.started_at,
-    finishedAt: data.finished_at,
-  };
 }
 
 export async function createClientRow(
@@ -1887,6 +1844,12 @@ function mapProfile(row: Row): BusinessProfile {
   return {
     seoScore: num(row.seo_score),
     previousSeoScore: num(row.previous_seo_score, num(row.seo_score)),
+    top10Count: num(row.top10_count),
+    previousTop10Count: num(row.previous_top10_count, num(row.top10_count)),
+    rankedCount: num(row.ranked_count),
+    avgPosition: num(row.avg_position),
+    previousAvgPosition: num(row.previous_avg_position, num(row.avg_position)),
+    rankingsCheckedAt: str(row.rankings_checked_at),
     geoScore: num(row.geo_score),
     previousGeoScore: num(row.previous_geo_score, num(row.geo_score)),
     monthlyVisits: num(row.monthly_visits),

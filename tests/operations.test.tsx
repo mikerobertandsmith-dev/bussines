@@ -286,20 +286,39 @@ describe("workspace health", () => {
 describe("features a configured provider cannot serve", () => {
   const has = (keys: string[]) => (key: string) => keys.includes(key);
 
-  it("names website discovery when the contacts actor id is missing", () => {
+  it("names each switched-off capability when its own actor id is missing", () => {
     // The provider itself is fine — social monitoring works with APIFY_TOKEN
     // alone — so the gap is reported as one feature being off, not as Apify
     // being broken. That distinction is the whole reason this list exists.
     expect(providerConfigured("apify", has(["APIFY_TOKEN"]))).toBe(true);
     expect(inactiveFeaturesFor("apify", has(["APIFY_TOKEN"]))).toEqual([
       "Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID to switch it on.",
+      "Website catalogue reading is off — add APIFY_SITE_ACTOR_ID to switch it on.",
+    ]);
+
+    // The site read behind the Suppliers and Competition pages runs on the website
+    // crawler the deployment already has, so setting that one clears both lines:
+    // there is no second secret to add for those pages.
+    expect(
+      inactiveFeaturesFor("apify", has(["APIFY_TOKEN", "APIFY_CONTACTS_ACTOR_ID"])),
+    ).toEqual([]);
+
+    // Its own slot is an override rather than a requirement, and either being set
+    // is enough for the capability the two share.
+    expect(
+      inactiveFeaturesFor("apify", has(["APIFY_TOKEN", "APIFY_SITE_ACTOR_ID"])),
+    ).toEqual([
+      "Website social discovery is off — add APIFY_CONTACTS_ACTOR_ID to switch it on.",
     ]);
   });
 
-  it("says nothing once the actor id is set", () => {
-    expect(inactiveFeaturesFor("apify", has(["APIFY_TOKEN", "APIFY_CONTACTS_ACTOR_ID"]))).toEqual(
-      [],
-    );
+  it("says nothing once every actor id is set", () => {
+    expect(
+      inactiveFeaturesFor(
+        "apify",
+        has(["APIFY_TOKEN", "APIFY_CONTACTS_ACTOR_ID", "APIFY_SITE_ACTOR_ID"]),
+      ),
+    ).toEqual([]);
   });
 
   it("leaves providers with no optional capabilities alone", () => {

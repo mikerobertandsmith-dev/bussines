@@ -75,10 +75,11 @@ Clerk JWT); the gateway calls the provider with the secret key and writes result
 
 | Function | Provider | Trigger | Writes |
 | --- | --- | --- | --- |
-| `serp-scan` | SerpApi | cron + "Scan now" | `serp_rankings`, `local_pack_rankings`, `local_profile_health` |
+| `serp-scan` | SerpApi | cron + the shared pull-to-refresh | `serp_rankings`, `local_pack_rankings`, `local_profile_health`, and the workspace's **search visibility** back onto `businesses` (`seo_score`, `top10_count`, `ranked_count`, `avg_position`, each with its `previous_*` twin, plus `rankings_checked_at`) — derived from the standings it just stored, by `_shared/seo.ts`, so the My Business health card cannot show an onboarding figure as a scan result |
 | `serp-competitors` | SerpApi | cron + "Run benchmark" (Competition → Local) | `competitor_share_of_voice`, `competitor_review_gap` |
 | `keyword-ideas` | SerpApi | on demand (My Business) | `keyword_ideas` |
 | `social-scan` | Apify | cron + "Scan now" | `social_posts`, `social_post_metrics` |
+| `site-scan` | Apify (the website actor already configured, `APIFY_CONTACTS_ACTOR_ID`; optional `APIFY_SITE_ACTOR_ID` override) | the shared pull-to-refresh on Suppliers / Competition (+ cron) | `supplier_items`, `competitor_items` (one row per **change**), `scan_runs`; advances `site_scan_at` / `site_run_id` / `last_scan_at` / `next_scan_at` on the source |
 | `web-contacts-scan` | Apify (the `contacts` slot, `APIFY_CONTACTS_ACTOR_ID`) | onboarding "Find them automatically" + Competition → Social presence | `competitors.contacts_*` and its own run ledger — **never** `competitor_social`, which it only proposes rows for. See [`docs/SOURCE_MANAGEMENT_BLUEPRINT.md`](SOURCE_MANAGEMENT_BLUEPRINT.md) Phases 3–4 |
 | `reviews-sync` | SerpApi + Apify (the `reviews` slot) | "Scan reviews now" | `my_reviews`, `my_review_sources`, `review_connections` |
 | `review-reply` | Google Business Profile (not connected yet) | user action | `review_replies`, updates `my_reviews.replied` |
@@ -101,11 +102,17 @@ Clerk JWT); the gateway calls the provider with the secret key and writes result
 Use **Supabase Cron (`pg_cron` + `pg_net`)** or a **Scheduled Edge Function** to invoke the gateway on
 the cadence already stored per source:
 
-- `suppliers.cadence` / `competitors.cadence` (`daily|weekly|monthly`) drive `social-scan` and `serp-scan`.
+- `suppliers.cadence` / `competitors.cadence` (`daily|weekly|monthly`) drive `social-scan`,
+  `site-scan` and `serp-scan`.
 - Review sync runs on the `my_review_sources` cadence (default weekly). The readers are pull-only, so
   there are no review webhooks (Reviewflowz's were removed).
-- Each run writes a `scan_runs` row (the existing "Scan now" contract in `src/lib/repo.ts`
-  `queueScan()`), so the UI's last-scan/next-scan behaviour stays truthful.
+- Each run writes a `scan_runs` row, so the UI's last-scan/next-scan behaviour stays truthful.
+  `site-scan` is what writes one for a watched supplier or competitor: it holds the Apify run id on
+  the source row while the crawl works, then records `succeeded`/`failed` with the number of changes
+  it found. Nothing consumes a `queued` row — a scan that has not run is not a scan.
+- The trigger today is the pull-to-refresh gesture the three monitoring pages share (capped at one
+  sweep an hour, which is what rations the spend). A cron caller invokes the same function per
+  source with `{ businessId, target, sourceId }`; no extra code is needed for it.
 
 ---
 

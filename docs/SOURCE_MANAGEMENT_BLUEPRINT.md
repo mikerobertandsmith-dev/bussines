@@ -220,7 +220,8 @@ covered by them.
 `suppliers` already has everything the forms collect (`name`, `website`, `category`, `cadence`,
 `lead_time_days`, `notes`). The only schema question is what "remove" means — see §5 Phase 1,
 decision 2. **`0020_*` was left unclaimed here so that decision stayed open** — Phase 4 later claimed
-it for `0020_contacts_discovery_runs.sql`, so an archive soft delete would now be `0021`.
+it for `0020_contacts_discovery_runs.sql`, and `0021` went to the site-scan change columns, so an
+archive soft delete would now be `0022`.
 
 ### 4.3 Client-side shape additions
 
@@ -423,7 +424,8 @@ so the lists stop being write-once.
    products and M posts") and require a second click. *The alternative — an `archived_at` column and a
    soft delete — is the cleaner long-term model but doubles the read-path changes (every query in
    `loadWorkspace` would need `is archived` filtering). It is deferred, not rejected: the next free
-   migration number is `0021` (Phase 4 took `0020` for the discovery ledger).*
+   migration number is `0022` (`0020` went to the discovery ledger, `0021` to the site-scan change
+   columns).*
 3. **Removing the last competitor must not break the page.** `CompetitionPage` already returns the
    "No competitors yet" card for an empty list — keep that path working (and give it the Add button),
    and make sure `activeId` is re-pointed when the active competitor is removed.
@@ -1034,5 +1036,5 @@ mapping that will otherwise silently produce nothing.
 | --- | --- | --- | --- |
 | 1 | **Which actor?** `KHpwuGIjj9pFfR5c` does not exist (Appendix A). | (a) send a corrected id; (b) `vdrmota/contact-info-scraper` `9Sk4JJhEma9vBKqrg`; (c) `logiover/website-contact-scraper` `LLJe5v9uwVDOwx3yG`; (d) another actor you name | ✅ **Decided: (b)** — most proven, explicitly extracts all four platforms we can monitor, `PAY_PER_EVENT` so it fits the Free plan's $5 ceiling |
 | 2 | **Accept a suggestion or auto-apply it?** Every accepted handle becomes a billed scrape target and may be a footer link to the competitor's web agency. | (a) propose → user accepts; (b) auto-write everything found | **(a)** — the reading is automatic as asked; the *writing* stays deliberate |
-| 3 | **Remove = hard delete or archive?** Deleting a competitor cascades its history. | (a) hard delete + a confirm that names the collateral (no migration); (b) `archived_at` soft delete (migration `0021` — `0020` went to the discovery ledger — more read-path changes) | **(a)** for now, (b) reserved |
+| 3 | **Remove = hard delete or archive?** Deleting a competitor cascades its history. | (a) hard delete + a confirm that names the collateral (no migration); (b) `archived_at` soft delete (migration `0022` — `0020` went to the discovery ledger and `0021` to the site-scan columns — more read-path changes) | **(a)** for now, (b) reserved |
 | 4 | **Enrich social profiles?** The actor can pull follower counts etc. at `+$0.001` per profile. | (a) off; (b) on | **(a)** — `social-scan` already measures followers and engagement properly, from the platform itself |

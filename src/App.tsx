@@ -1,10 +1,12 @@
 import { SignedIn, SignedOut } from "@clerk/clerk-react";
 import { AlertTriangle } from "lucide-react";
 import { Layout } from "./components/Layout";
+import { PullToRefresh } from "./components/PullToRefresh";
 import { ToastProvider } from "./components/Toast";
 import { btnPrimary } from "./components/primitives";
 import { authEnabled } from "./lib/env";
 import { useHashRoute, usePublicRoute } from "./lib/hooks";
+import { RefreshProvider } from "./lib/refresh";
 import { useWorkspace, WorkspaceLoading, WorkspaceProvider } from "./lib/workspace";
 import { SuppliersPage } from "./pages/SuppliersPage";
 import { CompetitionPage } from "./pages/CompetitionPage";
@@ -23,10 +25,24 @@ function AppShell() {
 
   return (
     <Layout route={route} navigate={navigate}>
-      {route === "suppliers" ? <SuppliersPage /> : null}
-      {route === "competition" ? <CompetitionPage /> : null}
+      {/* The three monitoring pages share one workspace, so they share one
+          drag-down refresh instead of a reload control each. */}
+      {route === "suppliers" ? (
+        <PullToRefresh>
+          <SuppliersPage />
+        </PullToRefresh>
+      ) : null}
+      {route === "competition" ? (
+        <PullToRefresh>
+          <CompetitionPage />
+        </PullToRefresh>
+      ) : null}
       {route === "clients" ? <ClientsPage /> : null}
-      {route === "business" ? <BusinessPage /> : null}
+      {route === "business" ? (
+        <PullToRefresh>
+          <BusinessPage />
+        </PullToRefresh>
+      ) : null}
       {route === "social" ? <SocialPage /> : null}
       {route === "inventory" ? <InventoryPage /> : null}
       {route === "promotion" ? <PromotionPage /> : null}
@@ -83,13 +99,19 @@ export function App() {
           </SignedOut>
           <SignedIn>
             <WorkspaceProvider>
-              <WorkspaceGate />
+              <RefreshProvider>
+                <WorkspaceGate />
+              </RefreshProvider>
             </WorkspaceProvider>
           </SignedIn>
         </>
       ) : (
         <WorkspaceProvider>
-          <AppShell />
+          {/* Above the shell, so the cap and the in-flight refresh are shared by
+              every page rather than starting over on each navigation. */}
+          <RefreshProvider>
+            <AppShell />
+          </RefreshProvider>
         </WorkspaceProvider>
       )}
     </ToastProvider>

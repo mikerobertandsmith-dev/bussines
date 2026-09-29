@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { ArrowRight } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -36,14 +35,13 @@ export type StatusStat = {
   /** 0–1. Drives both the readout and how many of the five bars light up. */
   progress: number;
   status: StatStatus;
-  hint?: string;
 };
 
 const BARS = [1, 2, 3, 4, 5];
 
 /**
- * Bordered stat grid: status pill, headline figure, a five-segment meter and a
- * footer link per cell.
+ * Bordered stat grid: status pill, headline figure and a five-segment meter per
+ * cell — a readout, with nothing in it that looks clickable but is not.
  */
 export function StatusStatGrid({ items, className }: { items: StatusStat[]; className?: string }) {
   return (
@@ -58,10 +56,7 @@ export function StatusStatGrid({ items, className }: { items: StatusStat[]; clas
         const filled = Math.round(clamp(item.progress, 0, 1) * BARS.length);
 
         return (
-          <div
-            key={item.name}
-            className="group relative flex flex-col gap-6 p-6 hover:bg-muted/40"
-          >
+          <div key={item.name} className="flex flex-col gap-6 p-6">
             <div className="flex items-center justify-between gap-3">
               <dt className="truncate text-sm font-medium text-foreground">{item.name}</dt>
               <dd className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
@@ -103,18 +98,6 @@ export function StatusStatGrid({ items, className }: { items: StatusStat[]; clas
                 ))}
               </div>
             </dd>
-
-            {item.hint ? (
-              <dd className="text-sm">
-                <span className="flex items-center gap-1 font-medium text-foreground">
-                  {item.hint}
-                  <ArrowRight
-                    aria-hidden={true}
-                    className="size-4 shrink-0 transition-transform group-hover:translate-x-0.5"
-                  />
-                </span>
-              </dd>
-            ) : null}
           </div>
         );
       })}

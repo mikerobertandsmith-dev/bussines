@@ -82,8 +82,24 @@ async function render() {
   return text();
 }
 
+/**
+ * Drags the page down far enough and releases, which is how the three monitoring
+ * pages refresh now that they carry no reload button of their own.
+ */
+function pullToRefresh() {
+  const surface = container.querySelector('[aria-label^="Pull down to refresh"]');
+  if (!surface) throw new Error("no pull-to-refresh surface on this page");
+  act(() => {
+    surface.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, clientY: 10 }));
+    surface.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, clientY: 210 }));
+  });
+  act(() => {
+    surface.dispatchEvent(new MouseEvent("pointerup", { bubbles: true, clientY: 210 }));
+  });
+}
+
 describe("Market Watch app", () => {
-  it("shows the supplier page with inventory changes and cadence controls", async () => {
+  it("shows the supplier page with inventory changes and the shared refresh surface", async () => {
     const content = await render();
     expect(content).toContain("Supplier updates");
     expect(content).toContain("Latest inventory from your suppliers");
@@ -91,11 +107,35 @@ describe("Market Watch app", () => {
 
     // Monitored suppliers live in their own Watching section, above the table.
     expect(text()).toContain("Watching");
-    expect(text()).toContain("Scan now");
-    expect(text()).toContain("Daily");
+    // The reload control is the shared drag-down surface, not a button per page.
+    expect(container.querySelector('[aria-label^="Pull down to refresh"]')).not.toBeNull();
   });
 
-  it("navigates to the competition page and shows ad, keyword and review signals", async () => {
+  it("refreshes all three monitoring pages from one drag-down gesture", async () => {
+    await render();
+
+    // One pull runs the workspace-wide scans, reads every watched site's own
+    // catalogue, and re-reads the workspace — and it says which half is which.
+    pullToRefresh();
+    await act(async () => {});
+    expect(text()).toContain("live scans ran");
+    expect(text()).toContain("site scans ran");
+
+    // The other two pages read the same workspace, so they are already current:
+    // a second pull inside the hour animates, then says so instead of re-scanning.
+    click(findByText("button", "Competition"));
+    expect(container.querySelector('[aria-label^="Pull down to refresh"]')).not.toBeNull();
+    pullToRefresh();
+    await act(async () => {});
+    expect(text()).toContain("Checking for new data");
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 950));
+    });
+    expect(text()).toContain("Already up to date");
+  });
+
+  it("navigates to the competition page and shows keyword, social and local signals", async () => {
     await render();
     click(findByText("button", "Competition"));
     expect(text()).toContain("Competition watch");
@@ -105,11 +145,19 @@ describe("Market Watch app", () => {
     click(findByText("button", "Keywords"));
     expect(text()).toContain("Keyword & SEO gap vs your platform");
 
-    click(findByText("button", "Ads"));
-    expect(text()).toContain("Banner link");
+    // Their own catalogue: only what moved, which is what the pull's site scan
+    // writes. An unchanged product is deliberately not a row here.
+    click(findByText("button", "New inventory"));
+    expect(text()).toContain("What changed on GlowMart Beauty's site");
+    expect(text()).toContain("Glass Skin Toner 200ml");
+    expect(text()).toContain("Price Change");
+    expect(text()).toContain("Only changes are listed");
 
-    click(findByText("button", "Reviews"));
-    expect(text()).toContain("Reviews their customers are leaving");
+    click(findByExactText("button", "Social"));
+    expect(text()).toContain("Recent posts they published");
+
+    click(findByText("button", "Local"));
+    expect(text()).toContain("Competitor review gap");
   });
 
   it("adds a competitor's social handle, which is the only source of scan targets", async () => {
@@ -302,9 +350,6 @@ describe("Market Watch app", () => {
     expect(text()).toContain("Review page analysis");
     expect(text()).toContain("Latest review scan");
 
-    click(findByText("button", "Competitor reviews"));
-    expect(text()).toContain("Competitor review brief");
-
     click(findByText("button", "Social media"));
     expect(text()).toContain("Social media score & where to focus");
   });
@@ -337,7 +382,7 @@ describe("Market Watch app", () => {
     expect(dialog.textContent ?? "").toContain("Upload logo");
   });
 
-  it("shows competitors' scraped posts, their top post and measured cadence", async () => {
+  it("shows competitors' scraped posts beside their monitored social presence", async () => {
     await render();
     click(findByText("button", "Competition"));
     // "Social" is also part of the nav label "Social & reviews", so match the tab exactly.
@@ -347,12 +392,10 @@ describe("Market Watch app", () => {
     expect(content).toContain("Recent posts they published");
     expect(content).toContain("Scan posts now");
     expect(content).toContain("sold out twice is back in stock");
-    // The top post card reports the best engagement in the 30-day window.
-    expect(content).toContain("Top post this cycle");
+    // Engagement is measured from the scraped post, not the competitor's claim.
     expect(content).toContain("8.07% engagement");
-    // Cadence comes from the scraped posts, not the competitor's claim.
-    expect(content).toContain("Cadence & engagement");
-    expect(content).toContain("Measured from the posts we scraped");
+    // The measured channels now sit beside the posts, in the second column.
+    expect(content).toContain("Social presence");
     // Competitor content is labelled as a signal, never as artwork to reuse.
     expect(content).toContain("Their posts are a signal, never artwork.");
   });
@@ -449,30 +492,6 @@ describe("Market Watch app", () => {
     expect(textarea().value).not.toBe(before);
     expect(textarea().value.length).toBeGreaterThan(20);
     expect(dialog.textContent ?? "").toContain("Sending is still yours to do");
-  });
-
-  it("turns a competitor's top post into an angle and creates a real brief from it", async () => {
-    await render();
-    click(findByText("button", "Competition"));
-    click(findByExactText("button", "Social"));
-    click(findByText("button", "Build our own from this angle"));
-    await act(async () => {});
-
-    const dialog = activeDialog();
-    const content = dialog.textContent ?? "";
-    expect(content).toContain("Angles from their top post");
-    expect(content).toContain("The shade that lasts past lunch");
-    // Their post is the signal; the angles are ours, and the dialog says so.
-    expect(content).toContain("Their wording is not reused");
-
-    click(dialogButton("Create this brief"));
-    await act(async () => {});
-
-    expect(text()).toContain("created — open Promotions to review it");
-
-    // It is a real brief, not a toast about one: it now shows in Ads history.
-    click(findByText("button", "Promotions"));
-    expect(text()).toContain("The shade that lasts past lunch");
   });
 
   it("groups keyword ideas into intent themes, keeping every suggestion", async () => {

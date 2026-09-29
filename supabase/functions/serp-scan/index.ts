@@ -20,6 +20,11 @@ import {
   serpApi,
   snippetTypeOf,
 } from "../_shared/serpapi.ts";
+import {
+  standingsByKeyword,
+  summariseRankings,
+  type RankingRow,
+} from "../_shared/seo.ts";
 
 /**
  * Google search & local scan (SerpApi).
@@ -28,6 +33,13 @@ import {
  *   - our organic position and whether our result carries a rich snippet;
  *   - the local map 3-pack and whether we are in it;
  * and once per run it refreshes our Google Business Profile health.
+ *
+ * It also writes the workspace's **search visibility** back onto the business row
+ * — `seo_score`, `top10_count`, `avg_position` (each with its `previous_*`
+ * counterpart) and `rankings_checked_at` — derived from the standings this scan
+ * holds. The My Business health card reads those columns, so without this pass the
+ * card would show the figures onboarding wrote rather than anything a scan found.
+ * The derivation lives in `_shared/seo.ts`.
  *
  * Deploy with `--no-verify-jwt` — the bearer token is a Clerk token, verified here.
  */
@@ -61,7 +73,11 @@ Deno.serve(async (req) => {
     const db = adminClient();
     const { data: business, error: businessError } = await db
       .from("businesses")
-      .select("id, brand_name, primary_domain, country")
+      // The score columns come along so each one's previous value — which is what
+      // the card shows movement against — can be carried over on the write below.
+      .select(
+        "id, brand_name, primary_domain, country, seo_score, top10_count, avg_position",
+      )
       .eq("id", businessId)
       .single();
     if (businessError || !business) throw new HttpError(404, "Business not found.");
@@ -238,6 +254,41 @@ Deno.serve(async (req) => {
       if (error) throw new HttpError(500, error.message);
     }
 
+    /* ------------------------------------------------- search visibility scores */
+    // Read back **every** desktop standing we hold, not just this run's: a run
+    // trimmed by the monthly budget covers fewer keywords, and a score computed
+    // from that slice would fall simply because less budget was left. Desktop is
+    // the set the Search tab renders, so the headline and the table agree.
+    const { data: standingRows } = await db
+      .from("serp_rankings")
+      .select("keyword, position, is_rich_result")
+      .eq("business_id", businessId)
+      .eq("device", "desktop");
+    const summary = summariseRankings(
+      standingsByKeyword((standingRows ?? []) as RankingRow[]),
+    );
+
+    // Nothing scanned yet — leave the row alone rather than overwriting an
+    // onboarding figure with a blank one.
+    if (summary.terms) {
+      const { error } = await db
+        .from("businesses")
+        .update({
+          previous_seo_score: business.seo_score ?? null,
+          seo_score: summary.seoScore,
+          previous_top10_count: business.top10_count ?? null,
+          top10_count: summary.top10Count,
+          ranked_count: summary.rankedCount,
+          previous_avg_position: business.avg_position ?? null,
+          // Null, not 0, when we appear for nothing: the card shows a dash, and a
+          // stored zero would read as "position zero".
+          avg_position: summary.avgPosition || null,
+          rankings_checked_at: checkedAt,
+        })
+        .eq("id", businessId);
+      if (error) throw new HttpError(500, error.message);
+    }
+
     await db.from("scan_runs").insert({
       business_id: businessId,
       source_type: "seo",
@@ -270,6 +321,14 @@ Deno.serve(async (req) => {
       rankings: rankingRows.length,
       packKeywords: packRows.length,
       placeId: ourPlaceId,
+      /** The search visibility written onto the business row, for the caller. */
+      search: {
+        seoScore: summary.seoScore,
+        top10Count: summary.top10Count,
+        rankedCount: summary.rankedCount,
+        avgPosition: summary.avgPosition,
+        terms: summary.terms,
+      },
       /** True when the monthly budget, not the tracked list, cut the run short. */
       capped,
     });

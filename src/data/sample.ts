@@ -4,7 +4,7 @@ import { competitors } from "./competitors";
 import { suppliers, supplierItems } from "./suppliers";
 import { deliveredAds, inventoryItems, promotionBriefs, samplePublishJobs, sampleSocialAccounts } from "./commerce";
 import { socialMonitorTargets, socialPosts } from "./social";
-import { daysAhead } from "../lib/format";
+import { daysAgo, daysAhead } from "../lib/format";
 import { buildProviderStatus } from "../lib/integrations";
 import type { BusinessMetrics, BusinessProfile, TrafficPoint, WorkspaceData } from "../lib/types";
 
@@ -62,6 +62,15 @@ export const sampleProfile: BusinessProfile = {
   onboardingComplete: true,
   seoScore: myBusiness.seoScore,
   previousSeoScore: myBusiness.previousSeoScore,
+  // Search visibility as `serp-scan` writes it: five of the eight tracked terms in
+  // the demo sit in the top 10, and the average position moved up since the scan
+  // before. Real workspaces get these from the scan, never from onboarding.
+  top10Count: 5,
+  previousTop10Count: 4,
+  rankedCount: 8,
+  avgPosition: 9.8,
+  previousAvgPosition: 11.2,
+  rankingsCheckedAt: daysAgo(0, 3),
   geoScore: myBusiness.geoScore,
   previousGeoScore: myBusiness.previousGeoScore,
   monthlyVisits: myBusiness.monthlyVisits,

@@ -145,12 +145,23 @@ export interface AudienceSlice {
   share: number;
 }
 
+/**
+ * One product change on a competitor's own site.
+ *
+ * Same shape as a `SupplierItem` minus the supplier-only columns: both shelves are
+ * written by `site-scan`, and both are a *change* — a product read again unchanged
+ * is not a row, which is why `change` is never empty here.
+ */
 export interface CompetitorItem {
   id: string;
   product: string;
+  sku: string;
   category: string;
   price: number;
+  previousPrice: number;
   stock: StockState;
+  previousStock: StockState;
+  change: ChangeType;
   detectedAt: string;
   url: string;
 }
@@ -640,6 +651,19 @@ export interface BusinessProfile {
   /* Latest business-level scores, refreshed by each scan. */
   seoScore: number;
   previousSeoScore: number;
+  /**
+   * Search visibility, derived by `serp-scan` from the rankings it stores rather
+   * than from anything a person typed at onboarding. Each figure carries the
+   * previous scan's value alongside it, so the health card shows movement instead
+   * of a lone number. `avgPosition` is 0 when we appear for none of the tracked
+   * terms, and `rankingsCheckedAt` is empty until the first scan.
+   */
+  top10Count: number;
+  previousTop10Count: number;
+  rankedCount: number;
+  avgPosition: number;
+  previousAvgPosition: number;
+  rankingsCheckedAt: string;
   geoScore: number;
   previousGeoScore: number;
   monthlyVisits: number;

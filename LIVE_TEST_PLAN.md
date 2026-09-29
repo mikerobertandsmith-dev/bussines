@@ -19,16 +19,17 @@ Verify this first, so a failure during testing is a real failure:
 
 ```bash
 npx supabase functions list                       # every function should be ACTIVE
-npx supabase migration list --linked              # 0001 … 0020, all applied
+npx supabase migration list --linked              # 0001 … 0021, all applied
 npx supabase secrets list                         # names only; values are never printed
 ```
 
 | Piece | What it is |
 | --- | --- |
-| 12 gateway functions | `serp-scan`, `serp-competitors`, `keyword-ideas`, `social-scan`, `web-contacts-scan`, `reviews-sync`, `review-reply`, `ai-draft`, `publish-ad`, `social-accounts`, `provider-webhook`, `integrations-status` |
-| 13 migrations | `0008`–`0020` (integration foundation → competitor discovery → its run ledger) |
+| 13 gateway functions | `serp-scan`, `serp-competitors`, `keyword-ideas`, `social-scan`, `web-contacts-scan`, `site-scan`, `reviews-sync`, `review-reply`, `ai-draft`, `publish-ad`, `social-accounts`, `provider-webhook`, `integrations-status` |
+| 15 migrations | `0008`–`0022` (integration foundation → competitor discovery → its run ledger → site-scan change columns → the business search-visibility columns) |
 | 5 providers | SerpApi, Apify, Reviews (via the two above), AI drafting (Groq), Mallary.ai |
 | 8 discovery secrets | `APIFY_CONTACTS_ACTOR_ID`, `…_MAX_CHARGE_USD`, `…_MAX_PAGES`, `…_MAX_DEPTH`, `…_RUN_TIMEOUT_SECS`, `…_ENRICH_PROFILES`, `…_PREVIEW_MAX_PER_HOUR`, `…_REUSE_WINDOW_MINUTES` |
+| 4 site-scan secrets | `APIFY_SITE_MAX_PAGES`, `APIFY_SITE_MAX_CHARGE_USD`, `APIFY_SITE_RUN_TIMEOUT_SECS`, `APIFY_SITE_MAX_ITEMS` — all with working defaults. The read itself runs on the website actor the deployment already has (`APIFY_CONTACTS_ACTOR_ID`), with optional `APIFY_SITE_ACTOR_ID` as a dedicated override, so **no site-scan secret has to be set** |
 
 **No provider key ever reaches the browser.** The app calls a gateway function; the function holds the
 key, makes the call server-side, and writes to a tenant-scoped table.
@@ -450,6 +451,59 @@ them here is that the suite fakes Postgres, so this is where the **real** `0020`
       sql "update competitors set website='https://<their site>' where name='<competitor>'"
       ```
 
+### 4.8 Catalogue scans — suppliers and competitors (`site-scan`)
+
+This is what the shared pull-to-refresh gesture runs, and the only thing that writes
+`supplier_items` / `competitor_items`. Both pages are served by one actor: the website crawler the
+deployment already has, `APIFY_CONTACTS_ACTOR_ID` — a supplier and a competitor are the same thing to
+this read, a business with a website — so nothing has to be added for these pages to work. Do this
+once in the default state, once with the optional override, and once with no website actor at all.
+
+- [ ] **Configured with no new secret (the normal state)** → leave `APIFY_SITE_ACTOR_ID` unset and
+      `APIFY_CONTACTS_ACTOR_ID` set, pull down on Suppliers, and expect *"N of M site scans ran"*.
+      This is the check that the Suppliers and Competition pages need no secret of their own. Then
+      confirm each source moved:
+
+      ```bash
+      sql "select name, last_scan_at, next_scan_at, site_scan_at, site_error, site_run_id
+           from suppliers order by site_scan_at desc nulls last limit 5"
+      sql "select change, count(*) from supplier_items group by change order by 2 desc"
+      sql "select endpoint, units, cost_usd from api_usage_log where provider='apify'
+           and endpoint like 'site:%' order by created_at desc limit 10"
+      ```
+
+- [ ] **Dedicated catalogue actor (optional override)** → set `APIFY_SITE_ACTOR_ID` to an actor that
+      reads product pages — one value, used by both pages — and repeat the pull. Expect the same toast
+      and that the usage rows above still land once per source. Put it back afterwards.
+- [ ] **Not configured** → clear `APIFY_SITE_ACTOR_ID` *and* `APIFY_CONTACTS_ACTOR_ID` (the read uses
+      whichever is present, so leaving the crawler set means it *is* configured), pull down on
+      Suppliers, and expect the toast to report the site scans as **not run** rather than failed. No run
+      is started, so `sql "select count(*) from scan_runs where source_type='supplier' and created_at > now() - interval '5 minutes'"`
+      stays at 0. Put `APIFY_CONTACTS_ACTOR_ID` back — competitor discovery is off without it.
+
+- [ ] **A second pull finds only what moved.** Pull again an hour later (or clear
+      `localStorage['workspace:pull-refresh-at']`) and expect `changes` to be 0 or small — **not** the
+      whole catalogue again. A product re-read unchanged must not appear as `new_product`:
+
+      ```bash
+      sql "select product, count(*) from supplier_items group by product having count(*) > 1
+           order by 2 desc limit 10"
+      ```
+
+      One row per real change is right; the same row per scan is the bug this replaced.
+- [ ] **A crawl that outlives the wait** reports *"still running"* rather than a result, and the *next*
+      pull collects it. `site_run_id` is set on the row in between, and collection is what writes
+      `site_scan_at` and the usage row — the cost lands once, never twice:
+
+      ```bash
+      sql "select source_id, cost_usd, created_at from api_usage_log
+           where endpoint like 'site:%' order by created_at desc limit 5"
+      ```
+
+- [ ] **Competition → New inventory** shows what changed on their site, with the price move and the
+      stock move behind each row, and an empty list reads as "their catalogue held still" rather than
+      as a failure.
+
 ### Deliberate non-features
 
 - **Only four platforms are ever written.** Instagram, TikTok, Facebook and X are the ones with a
@@ -470,9 +524,23 @@ them here is that the suite fakes Postgres, so this is where the **real** `0020`
 Cost: budgeted against `SERPAPI_MONTHLY_CAP` (250 on the free tier). "Find ideas" with intent probes
 costs **4 searches**.
 
-**My Business → Local**
+**My Business** — pull down to refresh; the page has no scan button of its own.
 
-- [ ] **Scan now** → organic positions per device, the Google map 3-pack and Business profile health fill in
+- [ ] **Pull to refresh** → organic positions per device, the Google map 3-pack and Business profile health fill in
+- [ ] **Overview → Search & AI visibility health** reports the scan's own figures rather than the ones
+      onboarding wrote: the top-10 count, the average position and their movement all come from the
+      `businesses` row, and the SEO tile's hint now reads *"was N at the last scan"*.
+
+      ```bash
+      sql "select seo_score, previous_seo_score, top10_count, previous_top10_count,
+                  ranked_count, avg_position, rankings_checked_at
+           from businesses limit 1"
+      ```
+
+      Expect `rankings_checked_at` moments old, and `top10_count` to equal the number of rows in the
+      Search tab whose position is 10 or better. Pull again an hour later: the current columns take the
+      figures the scan just derived and the `previous_*` columns take what they held, so a movement of
+      zero is the honest answer when nothing moved.
 - [ ] Toggle **Desktop / Mobile** → the ranking table switches without a full reload
 - [ ] **Find keywords** → seed e.g. `velvet lip kit` → **Find ideas** → suggestions appear
 - [ ] **Group into themes** → 2–5 themes, each with an intent badge

@@ -10,7 +10,6 @@ import {
   PackageSearch,
   Pencil,
   Plus,
-  RefreshCw,
   Sparkles,
   Trash2,
   Truck,
@@ -36,10 +35,9 @@ import {
 } from "../components/primitives";
 import { AreaChart } from "../components/charts";
 import { Modal } from "../components/Modal";
-import { useActionToast, useToast } from "../components/Toast";
+import { useToast } from "../components/Toast";
 import { alertsFor } from "../lib/alerts";
 import {
-  cadenceLabel,
   daysAgo,
   money,
   normaliseWebsite,
@@ -129,7 +127,6 @@ function priceDelta(item: SupplierItem) {
 
 export function SuppliersPage() {
   const toast = useToast();
-  const actionToast = useActionToast();
   const workspace = useWorkspaceData();
   const { actions } = useWorkspace();
   const suppliers = workspace.suppliers;
@@ -207,20 +204,6 @@ export function SuppliersPage() {
     suppliers.length > 0 && suppliers.every((s) => s.cadence === suppliers[0].cadence)
       ? suppliers[0].cadence
       : "daily";
-
-  function setAllCadence(value: Cadence) {
-    void actionToast(() => Promise.all(suppliers.map((s) => actions.setSupplierCadence(s.id, value))), {
-      success: `All ${suppliers.length} supplier sites will now be checked ${cadenceLabel(value).toLowerCase()}.`,
-      failure: "The supplier scan cadence could not be saved.",
-    });
-  }
-
-  function scanAll() {
-    void actionToast(() => Promise.all(suppliers.map((s) => actions.scanSupplier(s.id))), {
-      success: `Scan queued for all ${suppliers.length} supplier sites — results land with the next job run.`,
-      failure: "Those scans could not be queued.",
-    });
-  }
 
   function openAddSupplier() {
     setForm({
@@ -464,20 +447,7 @@ export function SuppliersPage() {
             <span className="text-xs text-slate-500">
               No supplier sites yet — nothing is being checked.
             </span>
-          ) : (
-            <span className="ml-auto flex flex-wrap items-center gap-2">
-              <span className="text-[11px] text-slate-500">Scan cadence</span>
-              <Segmented
-                size="sm"
-                options={CADENCE_OPTIONS}
-                value={sharedCadence}
-                onChange={setAllCadence}
-              />
-              <button type="button" className={btnGhost} onClick={scanAll}>
-                <RefreshCw size={13} /> Scan now
-              </button>
-            </span>
-          )}
+          ) : null}
         </div>
       </Card>
 

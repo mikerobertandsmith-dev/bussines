@@ -10,7 +10,6 @@ import {
   MapPin,
   Package,
   Plus,
-  RefreshCw,
   Search,
   ShoppingCart,
   Sparkles,
@@ -48,6 +47,19 @@ function deltaPct(current: number, previous: number): number {
   return Number((((current - previous) / previous) * 100).toFixed(1));
 }
 
+/**
+ * How the covered-terms count moved since the previous scan, or "" when it did not.
+ *
+ * A count is stated in terms rather than percent — "up 2 terms" — because a jump
+ * from 1 to 3 is not a 200% improvement of anything a user reads, and the scan's
+ * own wording should not imply precision the number does not have.
+ */
+function termsMoved(delta: number): string {
+  if (!delta) return "";
+  const noun = Math.abs(delta) === 1 ? "term" : "terms";
+  return ` — ${delta > 0 ? "up" : "down"} ${Math.abs(delta)} ${noun} since the last scan`;
+}
+
 function downloadText(filename: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
   const a = document.createElement("a");
@@ -78,13 +90,11 @@ export function BusinessPage() {
     geoVisibility,
     weeklyReports,
     buyList,
-    competitors,
   } = workspace;
 
   const [tab, setTab] = useState<BusinessTab>("overview");
   const [inventoryFilter, setInventoryFilter] = useState<"all" | "high" | "medium" | "low">("all");
   const [device, setDevice] = useState<SearchDevice>("desktop");
-  const [scanning, setScanning] = useState(false);
   const [ideaOpen, setIdeaOpen] = useState(false);
   const [ideaSeed, setIdeaSeed] = useState("");
   const [ideas, setIdeas] = useState<KeywordIdea[] | null>(null);
@@ -100,48 +110,6 @@ export function BusinessPage() {
   const richCount = deviceRankings.filter((row) => row.isRichResult).length;
   // Share of Voice is the same for the tenant across competitors; take the first row.
   const sov = shareOfVoice[0];
-
-  /**
-   * How many keywords the scan would actually look up.
-   *
-   * Mirrors the gateway's resolution order — our own tracked terms first, then a
-   * competitor's — because `serp-scan` refuses with a 409 when the total is zero.
-   * The button checked this itself so the refusal is explained in the page's own
-   * words, next to the control that fixes it, rather than arriving as a bare
-   * error after a round trip.
-   */
-  const trackedKeywordCount =
-    topSeoKeywords.length +
-    competitors.reduce((sum, competitor) => sum + competitor.keywordGap.length, 0);
-
-  async function scanSearch() {
-    if (mode === "demo") {
-      // Sample rankings already stand in; there is nothing to look up.
-      toast("Demo mode — showing the sample scan. Add SERPAPI_KEY to run a live scan.");
-      return;
-    }
-    if (trackedKeywordCount === 0) {
-      toast(
-        "There are no keywords to scan yet. Save a few with “Find keywords”, then run the scan.",
-      );
-      return;
-    }
-    setScanning(true);
-    try {
-      const result = await actions.runSerpScan();
-      if (result?.capped) {
-        toast(
-          `Scanned ${result.keywords} keyword${result.keywords === 1 ? "" : "s"} — this workspace has used its SerpApi budget for the month.`,
-        );
-      } else {
-        toast("Google search and local scan finished.");
-      }
-    } catch (cause) {
-      toast(cause instanceof Error ? cause.message : "The search scan could not be run.");
-    } finally {
-      setScanning(false);
-    }
-  }
 
   async function findIdeas() {
     const seed = ideaSeed.trim();
@@ -239,6 +207,18 @@ export function BusinessPage() {
   const seoDelta = deltaPct(myBusiness.seoScore, myBusiness.previousSeoScore);
   const geoDelta = deltaPct(myBusiness.geoScore, myBusiness.previousGeoScore);
   const industryDelta = myBusiness.industryRankPrevious - myBusiness.industryRank;
+  // The health card's search figures come from `serp-scan`, which derives them from
+  // the rankings it stores. Worded against the previous scan, so a number is never
+  // shown without what it moved from — and a workspace that has never been scanned
+  // says so instead of showing the same figure twice.
+  const top10Movement = termsMoved(profile.top10Count - profile.previousTop10Count);
+  const averagePositionMoved =
+    profile.avgPosition && profile.previousAvgPosition !== profile.avgPosition
+      ? ` (was ${profile.previousAvgPosition})`
+      : "";
+  const rankingsChecked = profile.rankingsCheckedAt
+    ? ` · checked ${relativeTime(profile.rankingsCheckedAt)}`
+    : " · not scanned yet";
 
   const recommendations = inventoryRecommendations.filter((r) =>
     inventoryFilter === "all" ? true : r.priority === inventoryFilter,
@@ -351,7 +331,7 @@ export function BusinessPage() {
               {seoDelta >= 0 ? `+${seoDelta}%` : `${seoDelta}%`}
               <span className="text-xs font-normal text-muted-foreground">
                 {myBusiness.previousSeoScore
-                  ? `was ${myBusiness.previousSeoScore} last week`
+                  ? `was ${myBusiness.previousSeoScore} at the last scan`
                   : "first baseline pending"}
               </span>
             </span>
@@ -427,9 +407,14 @@ export function BusinessPage() {
               <div className="rounded-xl bg-slate-50 p-3">
                 <ScoreRing score={myBusiness.seoScore} label="SEO score" tone="good" />
                 <p className="mt-2 text-[11px] text-slate-600">
-                  {myBusiness.backlinks} backlinks · ranking for{" "}
-                  {topSeoKeywords.filter((k) => k.position !== null && k.position <= 10).length} of{" "}
-                  {topSeoKeywords.length} tracked terms in the top 10.
+                  Ranking for {profile.top10Count} of {topSeoKeywords.length} tracked terms in the
+                  top 10{top10Movement}.
+                </p>
+                <p className="mt-1 text-[11px] text-slate-600">
+                  {myBusiness.backlinks} backlinks · average position{" "}
+                  {profile.avgPosition ? profile.avgPosition : "—"}
+                  {averagePositionMoved}
+                  {rankingsChecked}
                 </p>
               </div>
               <div className="rounded-xl bg-slate-50 p-3">
@@ -694,10 +679,6 @@ export function BusinessPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-            <button type="button" className={btnPrimary} onClick={() => void scanSearch()} disabled={scanning}>
-              <RefreshCw size={14} className={scanning ? "animate-spin" : ""} />
-              {scanning ? "Scanning…" : "Scan now"}
-            </button>
             <button
               type="button"
               className={btnGhost}

@@ -405,6 +405,30 @@ export interface SocialScanResult {
   message?: string;
 }
 
+/**
+ * The outcome of reading one watched site's catalogue (`site-scan`).
+ *
+ * `changes` is what the monitoring pages show — each one is a `*_items` row, i.e. a
+ * product that was newly listed, repriced or restocked. `items` is how much the read
+ * actually saw, so "0 changes" can be told apart from "the read found nothing".
+ */
+export interface SiteScanResult {
+  /** done | failed | running | unavailable */
+  status: string;
+  target: string;
+  sourceId: string;
+  scannedUrl: string;
+  /** Set while a crawl we stopped waiting for is still working. */
+  runId?: string;
+  /** Products the read saw on the site. */
+  items: number;
+  /** Products written as a change. */
+  changes: number;
+  costUsd?: number;
+  /** Why the read failed, or which variable is missing when unavailable. */
+  reason?: string;
+}
+
 export interface ReviewSyncResult {
   /** Profiles that synced successfully. */
   profiles: number;
