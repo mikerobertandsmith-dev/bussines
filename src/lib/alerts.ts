@@ -1,6 +1,6 @@
 import type { RouteId } from "./hooks";
 import type { IntegrationProvider, ScanRun, WorkspaceData } from "./types";
-import { money, relativeTime, titleCase, usd } from "./format";
+import { relativeTime, titleCase, usd } from "./format";
 import { platformLabel, summariseSocial } from "./social";
 import { PROVIDER_CATALOG, providerUsage, type WorkspaceHealth } from "./integrations";
 
@@ -30,34 +30,6 @@ function replyOverdue(postedAt: string, now = Date.now()): boolean {
 
 export function buildAlerts(data: WorkspaceData): Alert[] {
   const list: Alert[] = [];
-
-  for (const item of data.supplierItems) {
-    const supplier = data.suppliers.find((s) => s.id === item.supplierId);
-    if (!supplier) continue;
-
-    if (item.change === "price_change" && Math.abs(item.previousPrice - item.price) > 2) {
-      const drop = ((item.previousPrice - item.price) / item.previousPrice) * 100;
-      list.push({
-        id: `alert-${item.id}`,
-        page: "suppliers",
-        title: `${supplier.name}: ${drop >= 0 ? "price drop" : "price rise"}`,
-        detail: `${item.product} moved ${money(item.previousPrice)} → ${money(item.price)} (${drop.toFixed(1)}%).`,
-        at: item.detectedAt,
-        severity: Math.abs(drop) >= 10 ? "urgent" : "watch",
-      });
-    }
-
-    if (item.change === "stock_change" && item.stock === "out_of_stock") {
-      list.push({
-        id: `alert-${item.id}`,
-        page: "suppliers",
-        title: `${supplier.name}: stock out`,
-        detail: `${item.product} is no longer available at the supplier.`,
-        at: item.detectedAt,
-        severity: "watch",
-      });
-    }
-  }
 
   for (const comp of data.competitors) {
     for (const ad of comp.ads) {
@@ -281,7 +253,6 @@ export function buildAlerts(data: WorkspaceData): Alert[] {
 
 /** Which page raises a scan, so its failure can link to where it is re-run. */
 const SCAN_PAGE: Record<ScanRun["sourceType"], RouteId> = {
-  supplier: "suppliers",
   competitor: "competition",
   social: "competition",
   seo: "business",

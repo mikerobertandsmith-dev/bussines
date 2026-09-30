@@ -11,8 +11,8 @@ import { decodeEntities } from "./site.ts";
  *
  * ## What each row claims, and what it does not
  *
- * This is deliberately **inference from a rival's shelf**, not a demand forecast
- * and not a supplier quote. So:
+ * This is deliberately **inference from a rival's shelf**, not a demand forecast.
+ * So:
  *
  *   - `competitor_ref` says whose shelf it came from, always.
  *   - `reason` names that rival and the date, so the claim is checkable.

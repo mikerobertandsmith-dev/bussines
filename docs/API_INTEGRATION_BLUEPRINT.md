@@ -79,7 +79,7 @@ Clerk JWT); the gateway calls the provider with the secret key and writes result
 | `serp-competitors` | SerpApi | cron + "Run benchmark" (Competition → Local) | `competitor_share_of_voice`, `competitor_review_gap`, `competitor_keywords`, `competitor_metrics` (one review-trend point per competitor per month), and the competitor's own `rating` / `previous_rating` / `review_count` / `reviews_this_month` / `last_scan_at` — the Maps lookup already returns those figures, and the Competition panels read them off the competitor row rather than the gap table |
 | `keyword-ideas` | SerpApi | on demand (My Business) | `keyword_ideas` |
 | `social-scan` | Apify | cron + "Scan now" | `social_posts`, `social_post_metrics` |
-| `site-scan` | Apify — `APIFY_SITE_ACTOR_ID`, a **product-catalogue** actor, run with `discoverProducts` so the start URL is read as a storefront. Required in practice, not optional: the contacts crawler returns no product rows and no JSON-LD, so a catalogue read through it starts, bills and reports `succeeded` while writing **0** rows | the shared pull-to-refresh on Suppliers / Competition (+ cron) | `supplier_items`, `competitor_items` (one row per **change**), `scan_runs`; advances `site_scan_at` / `site_run_id` / `last_scan_at` / `next_scan_at` on the source |
+| `site-scan` | Apify — `APIFY_SITE_ACTOR_ID`, a **product-catalogue** actor, run with `discoverProducts` so the start URL is read as a storefront. Required in practice, not optional: the contacts crawler returns no product rows and no JSON-LD, so a catalogue read through it starts, bills and reports `succeeded` while writing **0** rows | the shared pull-to-refresh on Competition (+ cron) | `competitor_items` (one row per **change**, tagged `kind` — a product, a service or a price plan), `scan_runs`; advances `site_scan_at` / `site_run_id` / `last_scan_at` on the competitor |
 | `traffic-scan` | Apify — `APIFY_TRAFFIC_ACTOR_ID` (SimilarWeb through Apify; verified: `curious_coder/similarweb-scraper`). **Required in practice**: nothing else writes these tables, so without it every traffic tile reads 0 and every traffic chart draws nothing | every pull, for the whole workspace in one run (`{ domains: [...] }` — our domain plus every rival's) | `businesses.monthly_visits` / `visits_change`, `my_metrics` (`traffic`, `channel`), `competitors.monthly_visits` / `visits_change`, `competitor_metrics` (`traffic`, `traffic_source`), `scan_runs` (`traffic`). The series is **restated**, one `kind` at a time |
 | `ads-scan` | Apify — `APIFY_ADS_ACTOR_ID` (Meta Ad Library; verified: `apify/facebook-ads-scraper`). Read only for a competitor whose **Facebook page is saved**, because the library resolves a page exactly and a name not at all | every pull, one run covering every addressable competitor | `competitor_ads` (restated per competitor), `competitor_social.ads_running`, `scan_runs` (`ads`) |
 | `web-contacts-scan` | Apify (the `contacts` slot, `APIFY_CONTACTS_ACTOR_ID`) | onboarding "Find them automatically" + Competition → Social presence | `competitors.contacts_*` and its own run ledger — **never** `competitor_social`, which it only proposes rows for. See [`docs/SOURCE_MANAGEMENT_BLUEPRINT.md`](SOURCE_MANAGEMENT_BLUEPRINT.md) Phases 3–4 |
@@ -104,16 +104,15 @@ Clerk JWT); the gateway calls the provider with the secret key and writes result
 Use **Supabase Cron (`pg_cron` + `pg_net`)** or a **Scheduled Edge Function** to invoke the gateway on
 the cadence already stored per source:
 
-- `suppliers.cadence` / `competitors.cadence` (`daily|weekly|monthly`) drive `social-scan`,
-  `site-scan` and `serp-scan`.
+- `competitors.cadence` (`daily|weekly|monthly`) drives `social-scan`, `site-scan` and `serp-scan`.
 - Review sync runs on the `my_review_sources` cadence (default weekly). The readers are pull-only, so
   there are no review webhooks (Reviewflowz's were removed).
 - Each run writes a `scan_runs` row, so the UI's last-scan/next-scan behaviour stays truthful.
-  `site-scan` is what writes one for a watched supplier or competitor: it holds the Apify run id on
+  `site-scan` is what writes one for a watched competitor: it holds the Apify run id on
   the source row while the crawl works, then records `succeeded`/`failed` with the number of changes
   it found. Nothing consumes a `queued` row — a scan that has not run is not a scan.
 - The trigger today is the pull-to-refresh gesture the three monitoring pages share (capped at one
-  sweep per window — `PULL_REFRESH_INTERVAL_MS`, **20 minutes** — which is what rations the spend).
+  sweep per window — `PULL_REFRESH_INTERVAL_MS`, **10 minutes** — which is what rations the spend).
   The cap gates *starting* work, not finishing it: a
   source whose run id is still on the row — a crawl already billed and not yet read back — is
   collected by the next pull even inside the window, and only those sources are touched.
@@ -142,7 +141,7 @@ today. Every row below is a feature that was **never built**, not a read that br
 verified against live runs; see `supabase/functions/README.md` and `LIVE_TEST_PLAN.md` §4b for what a
 correct run looks like.
 | `weekly_reports` | My Business → reports | derived from the tables above, so it can only work once they hold data |
-| `inventory_recommendations`, `buy_list_items` | Suppliers → restock advice and buy list | derived from `supplier_items`, which is empty for a different reason: the watched factory sites publish no product catalogue to read |
+| `inventory_recommendations`, `buy_list_items` | Buy list → restock advice and buy list | derived from `competitor_items`, the rival catalogue reads already on file |
 
 Everything else on those three pages has a producer, and the tables below say which one:
 

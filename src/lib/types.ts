@@ -9,57 +9,14 @@ export type ChangeType =
 
 export type StockState = "in_stock" | "low_stock" | "out_of_stock" | "preorder";
 
-/* ---------------- Suppliers ---------------- */
-
-export interface Supplier {
-  id: string;
-  name: string;
-  website: string;
-  category: string;
-  cadence: Cadence;
-  lastScan: string;
-  nextScan: string;
-  scanHealth: number;
-  accountManager: string;
-  leadTimeDays: number;
-  /** Free text the user keeps about the supplier. Optional: most have none. */
-  notes?: string;
-  /**
-   * True while a catalogue crawl of this supplier's site has been paid for and not
-   * yet read back — `suppliers.site_run_id` is set (migration `0021`). Written by
-   * `site-scan`; read by pull-to-refresh, which collects such a run even inside
-   * the pull cap rather than leaving a dataset the user already paid for unread.
-   */
-  siteScanPending?: boolean;
-  /**
-   * When a catalogue read of this supplier last **settled**, whether or not it
-   * produced anything (`suppliers.site_scan_at`). Distinct from `lastScan`, which
-   * moves only on a read that produced something: a source whose site publishes no
-   * catalogue settles every time and would otherwise look untouched forever. This
-   * is what tells "read cleanly, nothing published" from "never read".
-   */
-  siteScanAt?: string;
-  /** Why the last catalogue read failed, when it did (`suppliers.site_error`). */
-  siteError?: string;
-}
-
-export interface SupplierItem {
-  id: string;
-  supplierId: string;
-  product: string;
-  sku: string;
-  category: string;
-  price: number;
-  previousPrice: number;
-  stock: StockState;
-  previousStock: StockState;
-  change: ChangeType;
-  detectedAt: string;
-  leadTimeDays: number;
-  moq: number;
-  url: string;
-  note?: string;
-}
+/**
+ * What a watched site published one catalogue row as.
+ *
+ * The site scraper reads all three from a competitor's own pages: a shopfront
+ * publishes products, a service business publishes services, and a business whose
+ * site is its pricing page publishes plans.
+ */
+export type ItemKind = "product" | "service" | "price_plan";
 
 /* ---------------- Competitors ---------------- */
 
@@ -165,15 +122,16 @@ export interface AudienceSlice {
 /**
  * One product change on a competitor's own site.
  *
- * Same shape as a `SupplierItem` minus the supplier-only columns: both shelves are
- * written by `site-scan`, and both are a *change* — a product read again unchanged
- * is not a row, which is why `change` is never empty here.
+ * Written by `site-scan`, and always a *change* — a product read again unchanged is
+ * not a row, which is why `change` is never empty here.
  */
 export interface CompetitorItem {
   id: string;
   product: string;
   sku: string;
   category: string;
+  /** What their site published this as; absent on rows read before migration 0025. */
+  kind?: ItemKind;
   price: number;
   previousPrice: number;
   stock: StockState;
@@ -218,9 +176,8 @@ export interface Competitor {
   /** When discovery last completed for this competitor. */
   contactsScannedAt?: string;
   /**
-   * The supplier-page equivalent of {@link Supplier.siteScanPending}: true while
-   * `competitors.site_run_id` (migration `0021`) holds a crawl this workspace has
-   * already paid for and not yet collected.
+   * True while `competitors.site_run_id` (migration `0021`) holds a crawl this
+   * workspace has already paid for and not yet collected.
    */
   siteScanPending?: boolean;
 }
@@ -491,7 +448,6 @@ export interface InventoryRecommendation {
   id: string;
   product: string;
   category: string;
-  supplierId: string;
   suggestedQty: number;
   estimatedPrice: number;
   marginPct: number;
@@ -778,7 +734,7 @@ export interface ReviewScan {
 
 export interface ScanRun {
   id: string;
-  sourceType: "supplier" | "competitor" | "reviews" | "seo" | "geo" | "social";
+  sourceType: "competitor" | "reviews" | "seo" | "geo" | "social";
   sourceId: string | null;
   sourceName: string;
   status: "queued" | "running" | "succeeded" | "failed";
@@ -856,7 +812,7 @@ export interface MonitoringSourceInput {
   cadence: Cadence;
   /**
    * The competitor's social profiles, if the user recorded any. Optional so an
-   * existing saved form (and every supplier row) stays valid without it.
+   * existing saved form stays valid without it.
    */
   socials?: CompetitorSocialInput[];
 }
@@ -870,16 +826,6 @@ export interface CompetitorInput {
   name: string;
   website: string;
   cadence: Cadence;
-  notes?: string;
-}
-
-/** What the supplier add/edit form collects. Same reasoning as `CompetitorInput`. */
-export interface SupplierInput {
-  name: string;
-  website: string;
-  category?: string;
-  cadence: Cadence;
-  leadTimeDays?: number;
   notes?: string;
 }
 
@@ -990,9 +936,7 @@ export interface OnboardingInput {
   socialHandles: Record<string, string>;
   notificationEmail: string;
   reportDay: string;
-  supplierCadence: Cadence;
   competitors: MonitoringSourceInput[];
-  suppliers: MonitoringSourceInput[];
   clientCadence: SendFrequency;
   clientMessageTypes: MessageType[];
   loginEmail: string;
@@ -1004,8 +948,6 @@ export interface OnboardingInput {
 export interface WorkspaceData {
   profile: BusinessProfile;
   metrics: BusinessMetrics;
-  suppliers: Supplier[];
-  supplierItems: SupplierItem[];
   competitors: Competitor[];
   clients: Client[];
   mailAccount: MailAccount;

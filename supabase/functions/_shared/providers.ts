@@ -49,9 +49,9 @@ export const PROVIDER_INACTIVE_FEATURES: Partial<
       label: "Website social discovery",
       envKey: "APIFY_CONTACTS_ACTOR_ID",
     },
-    // One entry, not one per page: a supplier's site and a competitor's site are
-    // read by the same actor, so there is nothing here that could be on for one
-    // page and off for the other.
+    // One entry, not one per page: a competitor's site read is the only catalogue
+    // scan, so there is nothing here that could be on for one page and off for
+    // another.
     //
     // A requirement, not an override, and deliberately not satisfied by
     // `APIFY_CONTACTS_ACTOR_ID`: that crawler reads contact details and returns no

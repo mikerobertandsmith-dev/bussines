@@ -34,8 +34,8 @@ export default function Footer({
       </div>
 
       <p className="max-w-md text-center text-sm text-muted-foreground">
-        A supplier, competitor and client monitoring workspace for retail teams — one desk instead
-        of a dozen open tabs.
+        A competitor and client monitoring workspace for retail teams — one desk instead of a
+        dozen open tabs.
       </p>
 
       <ul className="grid grid-cols-2 items-center justify-center gap-2 md:grid-cols-4 md:gap-8">

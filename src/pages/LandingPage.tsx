@@ -7,7 +7,6 @@ import {
   Mail,
   ShieldCheck,
   Sparkles,
-  Truck,
   Users,
 } from "lucide-react";
 import BlurredOrb from "@/components/templates/axis/blurred-orb";
@@ -21,10 +20,10 @@ import Pricing from "@/components/templates/axis/pricing";
 import Stats from "@/components/templates/axis/stats";
 import Testimonials from "@/components/templates/axis/testimonials";
 import Tools from "@/components/templates/axis/tools";
-import { Badge, Tabs, Td, Th, changeTone } from "@/components/primitives";
+import { Badge, Tabs, Td, Th } from "@/components/primitives";
 import { BarList, DeltaPill, ProgressRing } from "@/components/charts";
 import { sampleWorkspace } from "@/data/sample";
-import { compact, money, titleCase } from "@/lib/format";
+import { compact } from "@/lib/format";
 
 /* ---------------------------------------------------------------- content */
 
@@ -36,15 +35,15 @@ const NAV: NavLink[] = [
 ];
 
 const FEED_ROWS = [
-  { product: "Velvet Matte Lip Kit", note: "Lumière Cosmetics Supply", chip: "−16.4%", tone: "brand" as const },
-  { product: "Hydra Glow Serum 50ml", note: "Lumière Cosmetics Supply", chip: "Restocked", tone: "good" as const },
-  { product: "Aurora X5 128GB", note: "Vantage Phone Distributors", chip: "−10.5%", tone: "brand" as const },
+  { product: "Velvet Matte Lip Kit", note: "GlowMart Beauty", chip: "−16.4%", tone: "brand" as const },
+  { product: "Hydra Glow Serum 50ml", note: "GlowMart Beauty", chip: "Restocked", tone: "good" as const },
+  { product: "Aurora X5 128GB", note: "TecWave Electronics", chip: "−10.5%", tone: "brand" as const },
 ];
 
 const FAQ: FaqItem[] = [
   {
-    q: "Which supplier sites can it watch?",
-    a: "Any site with a catalogue or product listings — wholesale portals, trade sites and brand catalogues. You add each source during setup and choose how often it is checked.",
+    q: "Which competitors can it watch?",
+    a: "Any rival with a website — a shopfront, a trade site or a brand catalogue. You add each one during setup and choose how often it is checked.",
   },
   {
     q: "How often does it scan?",
@@ -68,7 +67,7 @@ const FAQ: FaqItem[] = [
 const DEMO = sampleWorkspace();
 
 /* The workspace screens, previewed with the same components the app renders. */
-type ScreenId = "suppliers" | "competition" | "business" | "clients";
+type ScreenId = "competition" | "business" | "clients";
 
 const SCREENS: {
   id: ScreenId;
@@ -82,13 +81,6 @@ const SCREENS: {
   src?: string;
   render: () => ReactNode;
 }[] = [
-  {
-    id: "suppliers",
-    label: "Suppliers",
-    icon: <Truck size={13} />,
-    url: "market-watch.app/#/suppliers",
-    render: () => <SuppliersScreen />,
-  },
   {
     id: "competition",
     label: "Competition",
@@ -115,7 +107,7 @@ const SCREENS: {
 /* ------------------------------------------------------------------ page */
 
 export function LandingPage() {
-  const [screen, setScreen] = useState<ScreenId>("suppliers");
+  const [screen, setScreen] = useState<ScreenId>("competition");
   const active = SCREENS.find((s) => s.id === screen) ?? SCREENS[0];
 
   function jump(id: string) {
@@ -217,7 +209,7 @@ function HeroPreview() {
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
           </span>
           <span className="ml-2 min-w-0 flex-1 truncate rounded-md bg-background px-2.5 py-1 text-[10px] text-muted-foreground ring-1 ring-border">
-            market-watch.app/#/suppliers
+            market-watch.app/#/competition
           </span>
           <Badge tone="good">live</Badge>
         </div>
@@ -229,9 +221,6 @@ function HeroPreview() {
               <ShieldCheck size={15} />
             </span>
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
-              <Truck size={15} />
-            </span>
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-slate-400">
               <Binoculars size={15} />
             </span>
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-slate-400">
@@ -247,7 +236,7 @@ function HeroPreview() {
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
               <div className="min-w-0">
                 <p className="truncate text-xs font-semibold text-foreground">
-                  Supplier updates
+                  Competition watch
                 </p>
                 <p className="truncate text-[10px] text-muted-foreground">
                   What changed since yesterday
@@ -357,66 +346,6 @@ function RingTile({ label, value, color }: { label: string; value: number; color
 }
 
 /* --------------------------------------------------------- screen mocks */
-
-function SuppliersScreen() {
-  const items = DEMO.supplierItems;
-  const suppliers = DEMO.suppliers;
-  const stats = [
-    { label: "Suppliers monitored", value: suppliers.length },
-    { label: "New items", value: items.filter((i) => i.change === "new_product").length },
-    {
-      label: "Price drops",
-      value: items.filter((i) => i.change === "price_change" && i.price < i.previousPrice).length,
-    },
-    {
-      label: "Back in stock",
-      value: items.filter((i) => i.change === "stock_change" && i.stock !== "out_of_stock")
-        .length,
-    },
-  ];
-
-  return (
-    <div className="p-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {stats.map((stat) => (
-          <MiniStat key={stat.label} label={stat.label} value={stat.value} />
-        ))}
-      </div>
-
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full min-w-[560px]">
-          <thead className="bg-slate-50">
-            <tr>
-              <Th>Product</Th>
-              <Th>Supplier</Th>
-              <Th>Change</Th>
-              <Th className="text-right">Buy price</Th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {items.slice(0, 4).map((item) => (
-              <tr key={item.id}>
-                <Td>
-                  <span className="block text-xs font-medium text-slate-900">{item.product}</span>
-                  <span className="text-[10px] text-slate-500">{item.sku}</span>
-                </Td>
-                <Td className="text-xs text-slate-700">
-                  {suppliers.find((s) => s.id === item.supplierId)?.name ?? "—"}
-                </Td>
-                <Td>
-                  <Badge tone={changeTone[item.change]}>{titleCase(item.change)}</Badge>
-                </Td>
-                <Td className="text-right text-xs font-semibold text-slate-900">
-                  {money(item.price)}
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
 
 function CompetitionScreen() {
   const competitor = DEMO.competitors[0];

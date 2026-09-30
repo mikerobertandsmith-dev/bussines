@@ -58,7 +58,7 @@ function subjectFor(client: Client, types: MessageType[]): string {
   const primary = types[0] ?? "weekly_report";
   switch (primary) {
     case "new_stock":
-      return `New at your suppliers, ${client.company}`;
+      return `New at your competitors, ${client.company}`;
     case "two_day_checkin":
       return `Mid-week check-in — 3 moves worth knowing`;
     case "platform_info":

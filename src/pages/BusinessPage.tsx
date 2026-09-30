@@ -8,7 +8,6 @@ import {
   Globe2,
   Lightbulb,
   MapPin,
-  Package,
   Plus,
   Search,
   ShoppingCart,
@@ -78,7 +77,6 @@ export function BusinessPage() {
   const {
     metrics: myBusiness,
     profile,
-    suppliers,
     inventoryRecommendations,
     topSeoKeywords,
     topGeoKeywords,
@@ -298,7 +296,6 @@ export function BusinessPage() {
       [
         r.product,
         r.category,
-        suppliers.find((s) => s.id === r.supplierId)?.name ?? "",
         r.suggestedQty,
         r.estimatedPrice,
         r.marginPct,
@@ -310,7 +307,7 @@ export function BusinessPage() {
     downloadText(
       `inventory-to-buy-${new Date().toISOString().slice(0, 10)}.csv`,
       [
-        "product,category,supplier,qty,est_price,margin_pct,traffic_potential,priority,competitor",
+        "product,category,qty,est_price,margin_pct,traffic_potential,priority,competitor",
         ...rows,
       ].join("\n"),
     );
@@ -375,7 +372,7 @@ export function BusinessPage() {
             <span className="flex items-center gap-2">
               {geoDelta >= 0 ? `+${geoDelta}%` : `${geoDelta}%`}
               <span className="text-xs font-normal text-muted-foreground">
-                cited in AI answers
+                of your tracked terms cite you
               </span>
             </span>
           }
@@ -479,6 +476,13 @@ export function BusinessPage() {
                     : topGeoKeywords.length
                       ? `Not cited in any of the ${topGeoKeywords.length} AI answers checked yet.`
                       : "No AI answer checked yet — the GEO pass runs with your keyword scan."}
+                </p>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {/* What the ring measures, now that it is coverage rather than a
+                      ratio over whichever overviews we managed to read. */}
+                  Scored across every tracked term checked for an AI answer — a term
+                  the answer leaves you out of scores nothing — and a listed source
+                  counts for more than a passing mention in the prose.
                 </p>
               </div>
             </div>
@@ -970,7 +974,7 @@ export function BusinessPage() {
             icon={<ShoppingCart size={16} />}
             title="Inventory you should get next"
             // Says what it is actually built from. The old line named competitor
-            // traffic and supplier price moves, neither of which this window ever
+            // traffic and competitor price moves, neither of which this window ever
             // read — which is why it stayed empty in every workspace.
             subtitle="Built from what your rivals have newly listed, matched against your tracked terms"
             action={
@@ -1011,19 +1015,13 @@ export function BusinessPage() {
           ) : (
             <div className="grid gap-4 px-4 py-4 md:grid-cols-2 xl:grid-cols-3">
               {recommendations.map((r) => {
-                const supplier = suppliers.find((s) => s.id === r.supplierId);
                 const added = buyList.includes(r.id);
                 return (
                   <div key={r.id} className="flex flex-col rounded-xl border border-slate-200 p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{r.product}</p>
-                        <p className="text-[11px] text-slate-500">
-                          {/* A derived suggestion has no supplier — it came from a
-                              rival's shelf — so the separator is joined rather
-                              than printed over an empty second half. */}
-                          {[r.category, supplier?.name].filter(Boolean).join(" · ")}
-                        </p>
+                        <p className="text-[11px] text-slate-500">{r.category}</p>
                       </div>
                       <Badge
                         tone={
@@ -1087,16 +1085,6 @@ export function BusinessPage() {
                       >
                         {added ? "On buy list" : "Add to buy list"}
                       </button>
-                      {supplier?.website ? (
-                        <a
-                          href={supplier.website}
-                          target="_blank"
-                          rel="noreferrer"
-                          className={btnGhost}
-                        >
-                          <Package size={13} /> Supplier site
-                        </a>
-                      ) : null}
                     </div>
                   </div>
                 );

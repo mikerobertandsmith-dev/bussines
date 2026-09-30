@@ -3,7 +3,6 @@ import {
   catalogueKey,
   catalogueUrl,
   jsonLdBlocks,
-  nextScanAt,
   normaliseCatalogue,
   normaliseProduct,
   parsePrice,
@@ -25,7 +24,7 @@ vi.stubGlobal("Deno", { env: { get: (name: string) => denoEnv.get(name) } });
 afterEach(() => denoEnv.clear());
 
 describe("site price parsing", () => {
-  it("reads the separators a real supplier page writes", () => {
+  it("reads the separators a real product page writes", () => {
     expect(parsePrice("18.40")).toBe(18.4);
     expect(parsePrice("$18.40")).toBe(18.4);
     expect(parsePrice("£1,299.00")).toBe(1299);
@@ -119,6 +118,96 @@ describe("site product normalising", () => {
   });
 });
 
+/**
+ * What a business sells is not always a product. A service business publishes
+ * `Service`, and a business whose site is its pricing page publishes plans — both
+ * of which used to be dropped, leaving those sites reading as "publishes no
+ * catalogue at all".
+ */
+describe("site item kinds", () => {
+  it("labels a product row by default", () => {
+    expect(normaliseProduct({ name: "Glass Skin Toner 200ml", price: "19.90" })?.kind).toBe(
+      "product",
+    );
+  });
+
+  it("reads a service the site publishes", () => {
+    const service = normaliseProduct({
+      "@type": "Service",
+      name: "Managed SEO retainer",
+      category: "Marketing",
+      offers: { price: "499" },
+    });
+
+    expect(service).toMatchObject({ kind: "service", product: "Managed SEO retainer", price: 499 });
+  });
+
+  it("reads an OfferCatalog of plans out of a pricing page", () => {
+    const catalogue = normaliseCatalogue(
+      [
+        {
+          structuredData: JSON.stringify({
+            "@type": "OfferCatalog",
+            name: "Plans",
+            itemListElement: [
+              { "@type": "Offer", name: "Starter", price: "29" },
+              { "@type": "Offer", name: "Pro", price: "79" },
+            ],
+          }),
+        },
+      ],
+      200,
+    );
+
+    expect(catalogue.map((c) => `${c.product}:${c.kind}`)).toEqual([
+      "Starter:price_plan",
+      "Pro:price_plan",
+    ]);
+  });
+
+  it("does not read a product's own offer as a separate price plan", () => {
+    // An `Offer` nested inside a `Product` is that product's price: counting it as
+    // well would double the catalogue and report the price as a plan.
+    const catalogue = normaliseCatalogue(
+      [
+        {
+          structuredData: JSON.stringify({
+            "@type": "Product",
+            name: "Mini Crossbody Bag",
+            sku: "SL-MCB-01",
+            offers: { "@type": "Offer", price: "28.90" },
+          }),
+        },
+      ],
+      200,
+    );
+
+    expect(catalogue).toHaveLength(1);
+    expect(catalogue[0]).toMatchObject({ kind: "product", sku: "SL-MCB-01", price: 28.9 });
+  });
+
+  it("falls back to the page's own path when it publishes no structured data", () => {
+    // A crawler that returns no JSON-LD still returns where the page lives, and a
+    // site's `/pricing` and `/services` pages are the ones that carry plans and
+    // services.
+    expect(
+      normaliseProduct({ name: "Growth retainer", url: "https://agency.example/pricing" })?.kind,
+    ).toBe("price_plan");
+    expect(
+      normaliseProduct({ name: "Onboarding", url: "https://agency.example/services/onboarding" })
+        ?.kind,
+    ).toBe("service");
+  });
+
+  it("keeps identity independent of the label", () => {
+    // A page that relabels a plan must not read as a new item on every scan.
+    const sku = "PLAN-PRO";
+    const asPlan = normaliseProduct({ name: "Pro", sku, "@type": "Offer", price: "79" });
+    const asProduct = normaliseProduct({ name: "Pro", sku, price: "79" });
+    expect(asPlan?.key).toBe(asProduct?.key);
+  });
+});
+
 describe("site catalogue assembly", () => {
   it("reads products nested under a listing item, and folds duplicates", () => {
     const items = [
@@ -198,8 +287,8 @@ describe("site actor configuration", () => {
     denoEnv.set("APIFY_CONTACTS_ACTOR_ID", "9Sk4JJhEma9vBKqrg");
     expect(siteActorId()).toBe("9Sk4JJhEma9vBKqrg");
 
-    // The catalogue actor takes over when one is configured, for both pages: the
-    // choice is per deployment, not per target.
+    // The catalogue actor takes over when one is configured: the choice is per
+    // deployment, not per source.
     denoEnv.set("APIFY_SITE_ACTOR_ID", "owner~catalogue-actor");
     expect(siteActorId()).toBe("owner~catalogue-actor");
   });
@@ -233,8 +322,8 @@ describe("site actor configuration", () => {
     // `discoverProducts` to treat the start URL as a storefront, and the generic
     // website crawler needs the page and depth names it knows. Each actor drops
     // the keys it does not use rather than refusing the run.
-    expect(siteInputFor("https://supplier.com", caps)).toEqual({
-      startUrls: [{ url: "https://supplier.com" }],
+    expect(siteInputFor("https://rival.com", caps)).toEqual({
+      startUrls: [{ url: "https://rival.com" }],
       // Without this the actor reads the home page as though it were a single
       // product page and returns its <title> as a product name — which
       // `normaliseProduct` accepts, so the junk would be stored and re-reported
@@ -255,7 +344,7 @@ describe("site actor configuration", () => {
     });
 
     // The product ceiling is the source's own cap, not a second hard-coded number.
-    expect(siteInputFor("https://supplier.com", { ...caps, maxItems: 7 })).toMatchObject({
+    expect(siteInputFor("https://rival.com", { ...caps, maxItems: 7 })).toMatchObject({
       maxProducts: 7,
     });
   });
@@ -272,19 +361,10 @@ describe("site actor configuration", () => {
   });
 });
 
-describe("site scan scheduling", () => {
-  it("moves the next due date by the source's cadence", () => {
-    const from = new Date("2026-01-31T00:00:00.000Z");
-    expect(nextScanAt("daily", from).slice(0, 10)).toBe("2026-02-01");
-    expect(nextScanAt("weekly", from).slice(0, 10)).toBe("2026-02-07");
-    expect(nextScanAt("monthly", from).slice(0, 10)).toBe("2026-03-02");
-  });
-});
-
 describe("settling a source after a catalogue read", () => {
   const collectedAt = "2026-09-29T05:15:51.013Z";
 
-  it("never asks a competitor for the supplier-only columns", () => {
+  it("names only the columns a competitor row actually has", () => {
     // The update that settles the row is also the one that clears `site_run_id`,
     // records the run and logs the cost, and it runs *after* the items are
     // written. Naming a column `competitors` does not have makes PostgREST reject
@@ -293,9 +373,7 @@ describe("settling a source after a catalogue read", () => {
     // perfectly well ends up with its products stored, its run uncollected, its
     // spend unlogged and a retry on every later pull.
     const patch = sourceSettlement({
-      target: "competitor",
       ok: true,
-      cadence: "daily",
       collectedAt,
     });
 
@@ -309,23 +387,9 @@ describe("settling a source after a catalogue read", () => {
     });
   });
 
-  it("schedules a supplier from its cadence, off the collection time", () => {
-    const patch = sourceSettlement({
-      target: "supplier",
-      ok: true,
-      cadence: "weekly",
-      collectedAt,
-    });
-
-    expect(patch.next_scan_at).toBe(nextScanAt("weekly", new Date(collectedAt)));
-    expect(String(patch.next_scan_at).slice(0, 10)).toBe("2026-10-06");
-  });
-
   it("clears the claim and records why, without moving any dates, on a read that found nothing", () => {
     const patch = sourceSettlement({
-      target: "competitor",
       ok: false,
-      cadence: "daily",
       collectedAt,
       error: "The site read did not finish cleanly: TIMED-OUT",
     });

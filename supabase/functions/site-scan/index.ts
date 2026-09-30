@@ -10,6 +10,7 @@ import {
   catalogueKey,
   catalogueUrl,
   normaliseCatalogue,
+  safeItemKind,
   safeStockState,
   sourceSettlement,
   siteActorHint,
@@ -18,7 +19,6 @@ import {
   siteInputFor,
   type ScrapedProduct,
   type SiteCaps,
-  type SiteTarget,
 } from "../_shared/site.ts";
 import {
   fetchDatasetItems,
@@ -29,27 +29,26 @@ import {
 } from "../_shared/apify.ts";
 
 /**
- * Reads a watched **website's catalogue** — a supplier's or a competitor's
- * product pages — and turns it into change rows. This is the scan the monitoring
- * pages' pull-to-refresh runs, and the reason `scan_runs` no longer holds rows
- * that only say `queued`: a site read now happens here, for real.
+ * Reads a watched **competitor's website catalogue** — their product pages — and
+ * turns it into change rows. This is the scan the Competition page's
+ * pull-to-refresh runs, and the reason `scan_runs` no longer holds rows that only
+ * say `queued`: a site read now happens here, for real.
  *
- * One handler serves both targets, because the two differ only in which table the
- * source lives in and which table the products land in — and both are read by the
- * same actor, `APIFY_SITE_ACTOR_ID`: a product-catalogue actor, because a supplier
- * and a competitor are the same thing to a site read (a business with a website).
- * It does need that secret. The fallback to `APIFY_CONTACTS_ACTOR_ID` still starts a
- * run, but that actor returns contact details and no product rows, so the scan bills,
- * reports success and writes nothing — see `_shared/site.ts` for the measurement.
+ * Both the source and the products live in the competitor tables
+ * (`competitors` / `competitor_items`), and the read runs through the product
+ * catalogue actor named by `APIFY_SITE_ACTOR_ID`. It does need that secret. The
+ * fallback to `APIFY_CONTACTS_ACTOR_ID` still starts a run, but that actor returns
+ * contact details and no product rows, so the scan bills, reports success and
+ * writes nothing — see `_shared/site.ts` for the measurement.
  *
- * ## What a row in `*_items` means
+ * ## What a row in `competitor_items` means
  *
- * A **change**, not a snapshot. `supplier_items.change` and `competitor_items.change`
- * are the enum the pages filter on ("New products", "Price moves", "Stock moves"),
- * and every one of the three means a difference from the previous read. So a
- * product that was read again unchanged is *not* written: writing it as
- * `new_product` (the only value left over) would relabel the whole catalogue as
- * new on every scan, which is exactly the signal the page exists to show.
+ * A **change**, not a snapshot. `competitor_items.change` is the enum the page
+ * filters on ("New products", "Price moves", "Stock moves"), and every one of the
+ * three means a difference from the previous read. So a product that was read
+ * again unchanged is *not* written: writing it as `new_product` (the only value
+ * left over) would relabel the whole catalogue as new on every scan, which is
+ * exactly the signal the page exists to show.
  *
  * The comparison is against the newest existing row **per product**, keyed by
  * `catalogueKey(sku, product)` — the SKU when the page publishes one, the
@@ -67,8 +66,8 @@ import {
  * the cost is recorded exactly once — when the run is collected.
  *
  * A crawl outlives one browser request, so the run id is held on the source row
- * (`suppliers.site_run_id` / `competitors.site_run_id`, migration `0021`) and the
- * next scan **collects** it instead of starting — and paying for — a second one.
+ * (`competitors.site_run_id`, migration `0021`) and the next scan **collects** it
+ * instead of starting — and paying for — a second one.
  *
  * Deploy with `--no-verify-jwt` — the bearer token is a Clerk token, verified here.
  */
@@ -76,13 +75,11 @@ import {
 interface Body {
   /** The workspace the source belongs to. Required: this writes tenant data. */
   businessId?: string;
-  /** Which kind of source to read. Defaults to `supplier`. */
-  target?: string;
-  /** The supplier or competitor row to read. */
+  /** The competitor row to read. */
   sourceId?: string;
 }
 
-/** The columns the handler needs off `suppliers` / `competitors`. */
+/** The columns the handler needs off `competitors`. */
 interface SourceRow {
   id: string;
   name: string;
@@ -90,8 +87,6 @@ interface SourceRow {
   cadence: string;
   /** Set while a crawl we stopped waiting for is still being collected. */
   site_run_id: string | null;
-  /** Suppliers only — carried onto the detected items as the source's lead time. */
-  lead_time_days?: number | null;
 }
 
 /** An existing product row, as the diff needs it. */
@@ -136,7 +131,6 @@ Deno.serve(async (req) => {
   // after the caller has been authenticated, can close over them.
   let db: ReturnType<typeof adminClient>;
   let caps: SiteCaps;
-  let target: SiteTarget = "supplier";
   let sourceId = "";
   let businessId = "";
   let source: SourceRow;
@@ -147,7 +141,6 @@ Deno.serve(async (req) => {
     const caller = await requireCaller(req);
     const body = await readJsonBody<Body>(req);
 
-    target = String(body.target ?? "") === "competitor" ? "competitor" : "supplier";
     sourceId = String(body.sourceId ?? "");
     businessId = String(body.businessId ?? "");
 
@@ -239,7 +232,6 @@ Deno.serve(async (req) => {
   function unavailable(reason: string) {
     return json({
       status: "unavailable",
-      target,
       sourceId,
       scannedUrl: "",
       items: 0,
@@ -252,7 +244,6 @@ Deno.serve(async (req) => {
   function running(runId: string, website: string): Response {
     return json({
       status: "running",
-      target,
       sourceId,
       scannedUrl: website,
       runId,
@@ -266,35 +257,15 @@ Deno.serve(async (req) => {
     return `The site read did not finish cleanly: ${detail}`;
   }
 
-  function sourceTable(): string {
-    return target === "supplier" ? "suppliers" : "competitors";
-  }
-
-  function itemTable(): string {
-    return target === "supplier" ? "supplier_items" : "competitor_items";
-  }
-
-  /** The foreign key on the item table that points back at the source. */
-  function sourceColumn(): string {
-    return target === "supplier" ? "supplier_id" : "competitor_id";
-  }
-
   async function loadSource(): Promise<SourceRow> {
-    // `lead_time_days` is a supplier column; asking for it on a competitor would
-    // be a non-existent column, so the two selects are not the same string.
-    const columns =
-      target === "supplier"
-        ? "id, name, website, cadence, site_run_id, lead_time_days"
-        : "id, name, website, cadence, site_run_id";
-
     const { data, error } = await db
-      .from(sourceTable())
-      .select(columns)
+      .from("competitors")
+      .select("id, name, website, cadence, site_run_id")
       .eq("id", sourceId)
       .eq("business_id", businessId)
       .maybeSingle();
     if (error) throw new HttpError(500, error.message);
-    if (!data) throw new HttpError(404, `That ${target} is not in this workspace.`);
+    if (!data) throw new HttpError(404, "That competitor is not in this workspace.");
     return data as unknown as SourceRow;
   }
 
@@ -364,15 +335,13 @@ Deno.serve(async (req) => {
     const changes = ok ? await writeItems(scraped) : 0;
     const collectedAt = new Date().toISOString();
 
-    // The patch is built by `_shared/site.ts`, which knows that the two source
-    // tables are not the same shape: a competitor has no `next_scan_at`, and this
-    // update is the one that settles the row — items are already written by now, so
-    // a rejected update would leave the catalogue in place and the run uncollected.
+    // The patch is built by `_shared/site.ts`, which knows the shape of the
+    // `competitors` row: this update is the one that settles it — items are
+    // already written by now, so a rejected update would leave the catalogue in
+    // place and the run uncollected.
     await patchSource(
       sourceSettlement({
-        target,
         ok,
-        cadence: source.cadence,
         collectedAt,
         error: failureReason(run).slice(0, 300),
       }),
@@ -383,7 +352,6 @@ Deno.serve(async (req) => {
 
     return json({
       status: ok ? "done" : "failed",
-      target,
       sourceId,
       scannedUrl: website,
       runId: run.id,
@@ -436,7 +404,7 @@ Deno.serve(async (req) => {
     }
 
     if (!rows.length) return 0;
-    const { error } = await db.from(itemTable()).insert(rows);
+    const { error } = await db.from("competitor_items").insert(rows);
     if (error) throw new HttpError(500, error.message);
     return rows.length;
   }
@@ -445,28 +413,27 @@ Deno.serve(async (req) => {
   function itemRow(product: ScrapedProduct, detectedAt: string): Record<string, unknown> {
     return {
       business_id: businessId,
-      [sourceColumn()]: sourceId,
+      competitor_id: sourceId,
       product: product.product,
       sku: product.sku || null,
       category: product.category || null,
+      // What the site published it as — a product, a service, or a price plan. The
+      // catalogue labels each row with it, so a business whose site is its pricing
+      // page no longer reads as "publishes no catalogue".
+      kind: safeItemKind(product.kind),
       price: product.price,
       stock: safeStockState(product.stock),
       url: product.url || null,
       detected_at: detectedAt,
-      // A supplier's own lead time applies to everything it sells; a competitor
-      // has no such column and no lead time to carry.
-      ...(target === "supplier" && source.lead_time_days != null
-        ? { lead_time_days: Number(source.lead_time_days) }
-        : {}),
     };
   }
 
   /** The current state we hold for each product of this source, by catalogue key. */
   async function newestByKey(): Promise<Map<string, KnownItem>> {
     const { data, error } = await db
-      .from(itemTable())
+      .from("competitor_items")
       .select("sku, product, price, stock, detected_at")
-      .eq(sourceColumn(), sourceId)
+      .eq("competitor_id", sourceId)
       .order("detected_at", { ascending: false })
       .limit(KNOWN_ROW_LIMIT);
     if (error) throw new HttpError(500, error.message);
@@ -484,7 +451,7 @@ Deno.serve(async (req) => {
     return index;
   }
 
-  /** One `scan_runs` row for the read, so the pages' history shows it. */
+  /** One `scan_runs` row for the read, so the page's history shows it. */
   async function insertRun(
     run: ApifyRun,
     ok: boolean,
@@ -493,7 +460,7 @@ Deno.serve(async (req) => {
   ): Promise<void> {
     const { error } = await db.from("scan_runs").insert({
       business_id: businessId,
-      source_type: target,
+      source_type: "competitor",
       source_id: sourceId,
       source_name: source.name,
       status: ok ? "succeeded" : "failed",
@@ -516,7 +483,7 @@ Deno.serve(async (req) => {
     await recordUsage(db, {
       businessId,
       provider: "apify",
-      endpoint: `site:${target}`,
+      endpoint: "site:competitor",
       // One site read, whatever it cost — the dollars are the unit this bills.
       units: 1,
       costUsd: run.usageTotalUsd,
@@ -527,7 +494,7 @@ Deno.serve(async (req) => {
 
   async function patchSource(patch: Record<string, unknown>): Promise<void> {
     const { error } = await db
-      .from(sourceTable())
+      .from("competitors")
       .update(patch)
       .eq("id", sourceId)
       .eq("business_id", businessId);

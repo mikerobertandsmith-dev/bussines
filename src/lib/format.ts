@@ -120,8 +120,8 @@ export function domainFromUrl(url: string): string {
 /**
  * A website as it should be stored and requested, from however someone typed it.
  *
- * `supplier.com`, `https://supplier.com/` and `https://supplier.com/wholesale`
- * all become `https://supplier.com`. Normalising in one place is what keeps the
+ * `competitor.com`, `https://competitor.com/` and `https://competitor.com/shop`
+ * all become `https://competitor.com`. Normalising in one place is what keeps the
  * onboarding step, the add/edit forms and the scrape input in agreement — and it
  * is about the *request* being valid, not about display (`domainFromUrl` above
  * is the display side).
@@ -149,4 +149,23 @@ export function titleCase(value: string): string {
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+/**
+ * What a scraped catalogue row is, as the monitoring pages label it.
+ *
+ * A missing kind means the row was read before the `kind` column existed
+ * (migration 0025), when only products were stored — so it reads as a product
+ * rather than as a blank label. Takes a plain string so this stays a leaf
+ * formatter with no import of the domain types.
+ */
+export function itemKindLabel(kind: string | undefined): string {
+  switch (kind) {
+    case "service":
+      return "Service";
+    case "price_plan":
+      return "Price plan";
+    default:
+      return "Product";
+  }
 }

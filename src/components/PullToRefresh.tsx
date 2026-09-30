@@ -39,7 +39,7 @@ function why(outcome: { error?: string }): string {
 /**
  * Drag-down refresh for the pages that share one workspace.
  *
- * The gesture is offered on Suppliers, Competition and My Business, and it runs a
+ * The gesture is offered on Competition and My Business, and it runs a
  * single workspace refresh rather than three separate reloads. What the user drags
  * into view is an indicator only: the page keeps the version it is already showing
  * until the new one lands, and nothing is swapped underneath them mid-read.
@@ -180,13 +180,13 @@ export function PullToRefresh({ children }: { children: ReactNode }) {
       ? "Refreshing — running your scans; this page keeps the last version until it lands"
       : ready
         ? "Release to refresh"
-        : "Pull down to refresh — suppliers, competitors and your business update together";
+        : "Pull down to refresh — competitors and your business update together";
 
   return (
     <div
       ref={surface}
       role="group"
-      aria-label="Pull down to refresh suppliers, competitors and your business"
+      aria-label="Pull down to refresh competitors and your business"
       className={`overscroll-contain ${distance > 0 ? "select-none" : ""}`}
       onPointerDown={(event) => {
         startY.current = null;

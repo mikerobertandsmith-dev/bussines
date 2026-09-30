@@ -158,10 +158,6 @@ Deno.serve(async (req) => {
     const { error: insertError } = await db.from("inventory_recommendations").insert(
       derived.map((recommendation) => ({
         business_id: businessId,
-        // No supplier link: this came from a rival's shelf, not from one of our
-        // suppliers' catalogues, and pointing it at a supplier we did not read it
-        // from would make the row claim a source it never had.
-        supplier_id: null,
         product: recommendation.product,
         category: recommendation.category,
         estimated_price: recommendation.estimatedPrice,

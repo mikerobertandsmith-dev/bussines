@@ -4,7 +4,6 @@ import {
   ArrowUpRight,
   Binoculars,
   Check,
-  Download,
   ExternalLink,
   Globe2,
   Image as ImageIcon,
@@ -20,7 +19,6 @@ import {
   Target,
   Trash2,
   Trophy,
-  Users,
 } from "lucide-react";
 import {
   Badge,
@@ -46,7 +44,14 @@ import { SocialSuggestions, useSuggestionChoices } from "../components/SocialSug
 import { AreaChart, BarList, Stars } from "../components/charts";
 import { StatusStatGrid, type StatStatus } from "../components/insights";
 import { useActionToast, useToast } from "../components/Toast";
-import { compact, money, normaliseWebsite, relativeTime, titleCase } from "../lib/format";
+import {
+  compact,
+  itemKindLabel,
+  money,
+  normaliseWebsite,
+  relativeTime,
+  titleCase,
+} from "../lib/format";
 import {
   SOCIAL_PLATFORMS,
   isRecentPost,
@@ -696,8 +701,8 @@ export function CompetitionPage() {
       />
 
       {tab === "overview" ? (
-        <div className="grid gap-5 xl:grid-cols-3">
-          <Card className="xl:col-span-2">
+        <div className="grid gap-5">
+          <Card>
             <CardHead
               icon={<Globe2 size={16} />}
               title={`${competitor.name} traffic and where it comes from`}
@@ -728,65 +733,6 @@ export function CompetitionPage() {
               </div>
             </div>
           </Card>
-
-          <div className="space-y-5">
-            <Card>
-              <CardHead
-                icon={<Users size={16} />}
-                title="Target audience on their ads"
-                subtitle="Segments their campaigns are aimed at"
-              />
-              <div className="px-4 py-4">
-                <BarList
-                  data={competitor.audience.map((a) => ({ label: a.segment, value: a.share }))}
-                  valueFormat={(n) => `${n}%`}
-                  color="#7c3aed"
-                />
-                <ul className="mt-4 space-y-2">
-                  {competitor.audience.map((a) => (
-                    <li key={a.segment} className="flex items-center justify-between text-[11px]">
-                      <span className="text-slate-500">Age band</span>
-                      <span className="font-medium text-slate-700">{a.ageRange}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </Card>
-
-            <Card>
-              <CardHead
-                icon={<Target size={16} />}
-                title="Suggested move this week"
-                subtitle="Built from the traffic, keyword and review signals"
-              />
-              <ul className="space-y-2 px-4 py-4 text-xs text-slate-700">
-                <li className="rounded-lg bg-slate-50 px-3 py-2">
-                  Publish a comparison page for{" "}
-                  <span className="font-medium">{keywords[0]?.keyword ?? "their best term"}</span> —
-                  they hold position {keywords[0]?.theirRank ?? 2}.
-                </li>
-                <li className="rounded-lg bg-slate-50 px-3 py-2">
-                  Answer the delivery complaint in their reviews with faster-dispatch messaging on
-                  your own ads.
-                </li>
-                <li className="rounded-lg bg-slate-50 px-3 py-2">
-                  Post {Math.max(3, (competitor.social[0]?.postsPerWeek ?? 6) - 3)} extra posts a week
-                  on {competitor.social[0]?.platform ?? "Instagram"} to close the cadence gap.
-                </li>
-              </ul>
-              <div className="border-t border-slate-100 px-4 py-3">
-                <button
-                  type="button"
-                  className={btnGhost}
-                  onClick={() =>
-                    toast(`Weekly ${competitor.name} brief queued for the next client email.`)
-                  }
-                >
-                  <Download size={13} /> Queue brief for clients
-                </button>
-              </div>
-            </Card>
-          </div>
         </div>
       ) : null}
 
@@ -795,7 +741,7 @@ export function CompetitionPage() {
           <CardHead
             icon={<Package size={16} />}
             title={`What changed on ${competitor.name}'s site`}
-            subtitle="Products read from their own shopfront that were listed, repriced or restocked since the previous scan"
+            subtitle="Products, services and price plans read from their own site that were listed, repriced or restocked since the previous scan"
             action={<Badge tone="brand">{competitor.newItems.length} changes</Badge>}
           />
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
@@ -806,11 +752,11 @@ export function CompetitionPage() {
           </div>
           {theirItems.length === 0 ? (
             <EmptyState
-              title={competitor.newItems.length ? "Nothing in this filter" : "No product changes yet"}
+              title={competitor.newItems.length ? "Nothing in this filter" : "No catalogue changes yet"}
               hint={
                 competitor.newItems.length
                   ? "Switch to “All” to see every change we detected."
-                  : "Pull down to read their site — a product only lands here when it is new, repriced or restocked."
+                  : "Pull down to read their site — an item lands here only when a product, a service or a price plan is newly listed, repriced or restocked."
               }
             />
           ) : (
@@ -832,7 +778,14 @@ export function CompetitionPage() {
                     return (
                       <tr key={item.id} className="align-top hover:bg-slate-50/70">
                         <Td>
-                          <span className="block font-medium text-slate-900">{item.product}</span>
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-medium text-slate-900">{item.product}</span>
+                            {/* A product is the default reading, so only the kinds
+                                that were previously dropped are labelled. */}
+                            {item.kind && item.kind !== "product" ? (
+                              <Badge tone="neutral">{itemKindLabel(item.kind)}</Badge>
+                            ) : null}
+                          </span>
                           <span className="text-[11px] text-slate-500">
                             {[item.sku, item.category].filter(Boolean).join(" · ") ||
                               "no SKU published"}
@@ -888,8 +841,10 @@ export function CompetitionPage() {
             </div>
           )}
           <div className="border-t border-slate-100 px-4 py-3 text-[11px] text-slate-500">
-            Only changes are listed: a product we read again unchanged is not a row, so an empty list
-            means their catalogue held still since the last scan.
+            Only changes are listed: something we read again unchanged is not a row, so an empty list
+            means their catalogue held still since the last scan. Each row is labelled with what
+            their site published it as — a product, a service they render, or one of their price
+            plans.
           </div>
         </Card>
       ) : null}

@@ -154,6 +154,37 @@ export function citationOf(
   return { cited: false, position: 0, sources: sources.length };
 }
 
+/**
+ * How much one AI answer's treatment of a business is worth, 0–1.
+ *
+ * The GEO score is a coverage figure — the share of tracked terms whose AI answer
+ * puts the business in front of someone — and this is what makes "in front of
+ * someone" mean something. Being listed as a *source* is the strong outcome: the
+ * answer actually points at the site, and the nearer the top of that list the
+ * better. A brand named only in the prose is a passing mention — it tells the
+ * reader the name but sends them nowhere — so it is worth less than the weakest
+ * listed source.
+ *
+ * Bounded at 1 so a business cited as the first source for every term scores
+ * exactly 100, which is what makes the number comparable between workspaces and
+ * across runs.
+ */
+export function citationWeight(citation: {
+  cited: boolean;
+  position: number;
+  sources: number;
+}): number {
+  if (!citation.cited) return 0;
+  // Listed as a source: the first is worth the full point, the last about 0.6.
+  if (citation.position >= 1) {
+    const sources = Math.max(1, citation.sources);
+    const rank = 1 - ((citation.position - 1) / sources) * 0.4;
+    return Number(Math.max(0.6, Math.min(1, rank)).toFixed(3));
+  }
+  // Named in the prose only, with no listed source of ours.
+  return 0.5;
+}
+
 export async function serpApi(params: Record<string, SerpApiParam>): Promise<SerpApiResponse> {
   const url = new URL(SERPAPI_BASE);
   url.searchParams.set("api_key", requireEnv("SERPAPI_KEY"));

@@ -58,18 +58,13 @@ interface Harness {
  * A workspace whose watched sources are all clear of pending crawls, with the
  * named ones marked as holding an uncollected run.
  */
-function harness(options: { pendingSuppliers?: string[]; pendingCompetitors?: string[] } = {}) {
-  const pendingSuppliers = new Set(options.pendingSuppliers ?? []);
+function harness(options: { pendingCompetitors?: string[] } = {}) {
   const pendingCompetitors = new Set(options.pendingCompetitors ?? []);
   const calls: string[] = [];
   const sample = sampleWorkspace();
 
   const data = {
     ...sample,
-    suppliers: sample.suppliers.map((supplier) => ({
-      ...supplier,
-      siteScanPending: pendingSuppliers.has(supplier.id),
-    })),
     competitors: sample.competitors.map((competitor) => ({
       ...competitor,
       siteScanPending: pendingCompetitors.has(competitor.id),
@@ -93,10 +88,6 @@ function harness(options: { pendingSuppliers?: string[]; pendingCompetitors?: st
     // Derived from data already on file, so it costs nothing — but it runs with
     // the sweep so the Buy list is never stale next to the panels it relates to.
     runBuyList: record("runBuyList"),
-    scanSupplierSite: async (supplierId: string) => {
-      calls.push(`scanSupplierSite:${supplierId}`);
-      return null;
-    },
     scanCompetitorSite: async (competitorId: string) => {
       calls.push(`scanCompetitorSite:${competitorId}`);
       return null;
@@ -149,18 +140,17 @@ describe("pull-to-refresh cap", () => {
     expect(spec.calls).toEqual([]);
     expect(spec.refresh).not.toHaveBeenCalled();
     // The stamp is untouched: an idle drag costs nothing and moves nothing.
-    expect(PULL_REFRESH_INTERVAL_MS).toBe(20 * 60 * 1000);
+    expect(PULL_REFRESH_INTERVAL_MS).toBe(10 * 60 * 1000);
     expect(window.localStorage.getItem(STORAGE_KEY)).toBe(stored);
   });
 
   it("collects a crawl that is already paid for, instead of reporting up to date", async () => {
     window.localStorage.setItem(STORAGE_KEY, new Date().toISOString());
     const sample = sampleWorkspace();
-    const supplier = sample.suppliers[0];
-    const competitor = sample.competitors[0];
+    const first = sample.competitors[0];
+    const second = sample.competitors[1];
     const spec = harness({
-      pendingSuppliers: [supplier.id],
-      pendingCompetitors: [competitor.id],
+      pendingCompetitors: [first.id, second.id],
     });
 
     const outcome = await mount(spec);
@@ -174,8 +164,8 @@ describe("pull-to-refresh cap", () => {
     });
     // Only the two sources holding a run were touched — the sweep is skipped.
     expect(spec.calls).toEqual([
-      `scanSupplierSite:${supplier.id}`,
-      `scanCompetitorSite:${competitor.id}`,
+      `scanCompetitorSite:${first.id}`,
+      `scanCompetitorSite:${second.id}`,
     ]);
     expect(spec.refresh).toHaveBeenCalledWith({ silent: true });
   });
@@ -183,7 +173,7 @@ describe("pull-to-refresh cap", () => {
   it("does not let a collection push the next sweep a whole window out", async () => {
     const stored = new Date().toISOString();
     window.localStorage.setItem(STORAGE_KEY, stored);
-    const spec = harness({ pendingSuppliers: [sampleWorkspace().suppliers[0].id] });
+    const spec = harness({ pendingCompetitors: [sampleWorkspace().competitors[0].id] });
 
     await mount(spec);
 
@@ -234,7 +224,7 @@ describe("pull-to-refresh cap", () => {
     const spec = harness();
 
     const sample = sampleWorkspace();
-    const watched = sample.suppliers.length + sample.competitors.length;
+    const watched = sample.competitors.length;
 
     const outcome = await mount(spec);
 

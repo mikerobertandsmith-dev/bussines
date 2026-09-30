@@ -1,8 +1,8 @@
 import { getEnv } from "./env.ts";
 
 /**
- * Apify client for reading a watched **website's catalogue** — a supplier's or a
- * competitor's product pages — and turning it into product rows.
+ * Apify client for reading a watched **competitor's website catalogue** — their
+ * product pages — and turning it into product rows.
  *
  * Separate from `_shared/apify.ts` (that one is pointed at a social profile and
  * returns posts) and from `_shared/contacts.ts` (a website, but returning social
@@ -12,11 +12,11 @@ import { getEnv } from "./env.ts";
  *
  * ## The contract an actor has to meet
  *
- * A **product-catalogue actor is required**: `APIFY_SITE_ACTOR_ID`. A supplier and
- * a competitor are the same thing to this scan — a business with a website — so one
- * configured id serves both pages, but only an actor that actually publishes
- * products can serve them. The id is **configuration**, never a constant, so a
- * different catalogue actor is a secret change rather than a release.
+ * A **product-catalogue actor is required**: `APIFY_SITE_ACTOR_ID`. A competitor is
+ * just a business with a website, so one configured id serves the page, but only an
+ * actor that actually publishes products can serve it. The id is **configuration**,
+ * never a constant, so a different catalogue actor is a secret change rather than a
+ * release.
  *
  * It is **not** interchangeable with `APIFY_CONTACTS_ACTOR_ID`, the crawler behind
  * the competitor "find their socials" flow. That actor returns contact details —
@@ -45,12 +45,20 @@ import { getEnv } from "./env.ts";
  *      Google. Any `html`, `markdown`, `text` or `jsonLd` field a crawler returns is
  *      searched for those blocks.
  *
+ * ## Products, services and price plans
+ *
+ * What a business sells is not always a product. A shopfront publishes `Product`
+ * rows; a business that renders a service publishes `Service`; and a business whose
+ * site is its pricing page publishes an `OfferCatalog` of `Offer`s — "Starter",
+ * "Pro", "£29/mo". All three are read here and tagged with a `kind`, because the
+ * monitoring pages exist to show what a watched site is *selling*, and a catalogue
+ * that silently drops every service and every plan is not that. The tag is read
+ * from the page's own structured data first and from the URL it came from second,
+ * so an actor that returns no structured data still gets a sensible label.
+ *
  * Nothing here is written anywhere on its own: the function that calls this decides
  * what a *change* is and which rows to keep.
  */
-
-/** Which page a read belongs to. The two differ only in the tables they touch. */
-export type SiteTarget = "supplier" | "competitor";
 
 /**
  * The variables that switch the site read on, the dedicated slot first.
@@ -63,10 +71,10 @@ export const SITE_ACTOR_ENV_KEYS = ["APIFY_SITE_ACTOR_ID", "APIFY_CONTACTS_ACTOR
 /**
  * The actor id a site read runs, or "" when this deployment has no website actor.
  *
- * `APIFY_SITE_ACTOR_ID` wins when it is set, and is the one that matters — one name
- * for both pages, because a supplier's wholesale list and a rival's shopfront are
- * read the same way. It is a requirement rather than an override; the fallback below
- * cannot read a catalogue at all (see the module note above).
+ * `APIFY_SITE_ACTOR_ID` wins when it is set, and is the one that matters — the
+ * catalogue reader behind the Competition page's site scan. It is a requirement
+ * rather than an override; the fallback below cannot read a catalogue at all (see
+ * the module note above).
  *
  * The fallback to `APIFY_CONTACTS_ACTOR_ID` is kept so that a deployment with no
  * catalogue actor still resolves to *an* id, which is what lets the Integrations
@@ -136,8 +144,8 @@ export interface SiteCaps {
  * not just its breadth. At 200 items a single Cotopaxi read cost **$1.00** — its
  * own `maxTotalChargeUsd` ceiling, hit exactly — and four of them in one day spent
  * the whole $5 monthly allowance, after which Apify refused *every* run on the
- * account and six separate panels (supplier catalogues, competitor inventory,
- * social, traffic, advertising) looked independently broken. Sixty items is about
+ * account and six separate panels (competitor inventory, social, traffic,
+ * advertising) looked independently broken. Sixty items is about
  * $0.30, and only a source that publishes a readable catalogue pays anything at
  * all: of twelve watched sources, one does.
  *
@@ -192,11 +200,16 @@ export function catalogueUrl(value: string): string {
  *
  * The page ceiling is expressed three ways (`maxCrawlPages`, `maxRequests`,
  * `maxRequestsPerStartUrl`) and the depth two (`maxCrawlDepth`, `maxDepth`)
- * because actors disagree on the name. `sameDomain` keeps a supplier's links to
- * its own social sites from being crawled as catalogue pages.
+ * because actors disagree on the name. `sameDomain` keeps a site's links to its
+ * own social sites from being crawled as catalogue pages.
  *
  * Product *detail* pages are the point in both contracts, so the crawl follows
  * links rather than stopping at the home page.
+ *
+ * A service or pricing page is reached by this same crawl, not a second one: the
+ * depth limit lets the walk follow a home page's `/services` and `/pricing` links,
+ * `sameDomain` keeps it on the site, and whatever those pages publish — `Service`
+ * rows or an `OfferCatalog` of plans — is read by the normalising below.
  */
 export function siteInputFor(url: string, caps: SiteCaps): Record<string, unknown> {
   return {
@@ -235,10 +248,21 @@ export function siteInputFor(url: string, caps: SiteCaps): Record<string, unknow
 
 /* -------------------------------------------------------------- normalising */
 
-/** One product the site publishes, on our own columns. */
+/** What a watched site published one catalogue row as. */
+export type ItemKind = "product" | "service" | "price_plan";
+
+const ITEM_KINDS: ItemKind[] = ["product", "service", "price_plan"];
+
+/** One thing the site publishes, on our own columns. */
 export interface ScrapedProduct {
   /** Stable identity for change detection: the SKU when the page gives one. */
   key: string;
+  /**
+   * What the site published this as. Shown as a label on both catalogues; it never
+   * takes part in identity, so a page that relabels a plan does not read as a new
+   * product.
+   */
+  kind: ItemKind;
   product: string;
   sku: string;
   category: string;
@@ -264,7 +288,7 @@ function firstString(...values: unknown[]): string {
  * A price out of whatever the page wrote: `18.40`, `$18.40`, `18,40`, `1,299.00`.
  *
  * A decimal comma is read as a decimal separator, not a thousands one, because
- * `18,40` on a European supplier's page is eighteen-forty — reading it as 1840
+ * `18,40` on a European page is eighteen-forty — reading it as 1840
  * would turn a real price move into an absurd one. Thousands separators only
  * apply when the comma group is exactly three digits *and* a decimal point is
  * also present.
@@ -330,41 +354,17 @@ export function catalogueKey(sku: string, product: string): string {
 }
 
 /**
- * When a source is next due, from its cadence.
+ * What a settled catalogue read writes back to its competitor row.
  *
- * A deliberate duplicate of `CADENCE_DAYS` in `src/lib/schedule.ts`: the gateway
- * cannot import from `src/`, and the two must not disagree about what "daily"
- * means or a scan's next-due date would flip depending on which side wrote it.
- */
-export function nextScanAt(cadence: string, from: Date = new Date()): string {
-  const days = cadence === "monthly" ? 30 : cadence === "weekly" ? 7 : 1;
-  const next = new Date(from);
-  next.setDate(next.getDate() + days);
-  return next.toISOString();
-}
-
-/**
- * What a settled catalogue read writes back to **its own** source row.
- *
- * `suppliers` and `competitors` are not the same shape, and PostgREST rejects an
- * update that names a column its table does not have — in the failure that
- * prompted this helper, `could not find the 'next_scan_at' column of
- * 'competitors' in the schema cache`. That is not a cosmetic error here. This
- * update is the only thing that clears `site_run_id`, records the run in
- * `scan_runs` and logs the cost, and it runs *after* the items are written — so a
- * competitor read that filled a whole catalogue still failed at the last step:
- * the products landed, the source went on looking "in flight" for ever, the Apify
- * spend never reached `api_usage_log`, and every later pull retried it.
- *
- * `next_scan_at` is a supplier column, exactly like `lead_time_days`, which
- * `loadSource` already asks for only for a supplier.
+ * This update is the only thing that clears `site_run_id`, records the run in
+ * `scan_runs` and logs the cost, and it runs *after* the items are written, so it
+ * must name only columns `competitors` actually has — PostgREST rejects the whole
+ * update otherwise.
  */
 export function sourceSettlement(input: {
-  target: SiteTarget;
   /** True when the read produced something usable; a failed read moves no dates. */
   ok: boolean;
-  cadence: string;
-  /** When the read settled, also the base for the next due date. */
+  /** When the read settled. */
   collectedAt: string;
   /** The failure to record, already worded and truncated by the caller. */
   error?: string;
@@ -376,14 +376,7 @@ export function sourceSettlement(input: {
     // `last_scan_at` moves only on a read that produced something, so a failed
     // scan cannot make the page claim a fresh scan; `site_scan_at` records the
     // attempt either way.
-    ...(input.ok
-      ? {
-          last_scan_at: input.collectedAt,
-          ...(input.target === "supplier"
-            ? { next_scan_at: nextScanAt(input.cadence, new Date(input.collectedAt)) }
-            : {}),
-        }
-      : {}),
+    ...(input.ok ? { last_scan_at: input.collectedAt } : {}),
   };
 }
 
@@ -481,6 +474,66 @@ export function decodeEntities(value: string): string {
     );
 }
 
+/**
+ * What one scraped row is: a product, a service, or a price plan.
+ *
+ * The page's own structured data is read first, because it is explicit when it is
+ * published, and the URL second, because a crawler that returns no structured data
+ * still returns *where the page lives* — and a site's `/pricing` and `/services`
+ * pages are exactly the ones that carry plans and services. Anything unlabelled is
+ * a product, which is what a plain catalogue row is.
+ */
+function kindOf(raw: Record<string, unknown>): ItemKind {
+  const type = firstString(raw["@type"]).toLowerCase().replace(/\s+/g, "");
+  if (type === "service") return "service";
+  // A bare Offer reached outside a product is a plan: inside a product it is that
+  // product's price, and the walk in `productsFromJson` never surfaces those.
+  if (type === "offer" || type === "aggregateoffer") return "price_plan";
+
+  // A recurring price is a plan whether or not the page says the word: a billing
+  // period, a tier name, or a `priceSpecification` that repeats.
+  if (raw.recurring === true) return "price_plan";
+  if (
+    firstString(
+      raw.billingPeriod,
+      raw.billingCycle,
+      raw.billingDuration,
+      raw.planName,
+      raw.tier,
+      raw.plan,
+      raw.recurring,
+      raw.pricePlan,
+    )
+  ) {
+    return "price_plan";
+  }
+  const spec = raw.priceSpecification;
+  if (spec && typeof spec === "object" && !Array.isArray(spec)) {
+    const record = spec as Record<string, unknown>;
+    if (
+      firstString(
+        record.billingDuration,
+        record.billingIncrement,
+        record.billingPeriod,
+        record.recurring,
+      )
+    ) {
+      return "price_plan";
+    }
+  }
+
+  const path = firstString(raw.url, raw.link, raw.productUrl, raw.detailUrl, raw["@id"]);
+  if (path) {
+    if (/\/(pricing|plans?|price-plans|packages|subscriptions?|tiers?)(\/|$|\?)/i.test(path)) {
+      return "price_plan";
+    }
+    if (/\/(services?|solutions|what-we-do|what-we-offer|capabilities)(\/|$|\?)/i.test(path)) {
+      return "service";
+    }
+  }
+  return "product";
+}
+
 export function normaliseProduct(raw: Record<string, unknown>): ScrapedProduct | null {
   const offer = offerOf(raw);
   const product = firstString(
@@ -510,6 +563,7 @@ export function normaliseProduct(raw: Record<string, unknown>): ScrapedProduct |
 
   return {
     key: catalogueKey(sku, product),
+    kind: kindOf(raw),
     product: decodeEntities(product).slice(0, 300),
     sku: sku.slice(0, 120),
     category: firstString(raw.category, raw.productType, raw.categoryName).slice(0, 120),
@@ -520,13 +574,26 @@ export function normaliseProduct(raw: Record<string, unknown>): ScrapedProduct |
 }
 
 /**
- * schema.org products out of a JSON string — a page's embedded JSON-LD, or an
- * actor field that carries the structured data through.
+ * The schema.org types that describe something a business sells or renders.
+ *
+ * `Product` is the shopfront's shelf; `Service` is what a business that renders a
+ * service publishes instead; and a bare `Offer`/`AggregateOffer` reached outside a
+ * product is how a pricing page publishes its plans. An `Offer` nested *inside* a
+ * product is that product's price rather than a separate row — the walk below
+ * returns as soon as it takes a `Product`, so it never descends into one and never
+ * double-counts the same price as both a product and a plan.
+ */
+const SELLABLE_TYPES = new Set(["product", "service", "offer", "aggregateoffer"]);
+
+/**
+ * schema.org products, services and price plans out of a JSON string — a page's
+ * embedded JSON-LD, or an actor field that carries the structured data through.
  *
  * Deliberately tolerant: a block may be a single object, an array, or wrapped in
- * `@graph`, and the `Product` may be nested inside an `ItemList` (how category
- * pages publish it). Anything unparseable is skipped rather than thrown, because
- * one malformed block on a page must not lose the rest of the catalogue.
+ * `@graph`, and the sellable node may be nested inside an `ItemList` or an
+ * `OfferCatalog` (how category and pricing pages publish it). Anything unparseable
+ * is skipped rather than thrown, because one malformed block on a page must not
+ * lose the rest of the catalogue.
  */
 function productsFromJson(value: string): Record<string, unknown>[] {
   const found: Record<string, unknown>[] = [];
@@ -545,8 +612,8 @@ function productsFromJson(value: string): Record<string, unknown>[] {
     }
     if (typeof node !== "object") return;
     const record = node as Record<string, unknown>;
-    const type = firstString(record["@type"]).toLowerCase();
-    if (type === "product") {
+    const type = firstString(record["@type"]).toLowerCase().replace(/\s+/g, "");
+    if (SELLABLE_TYPES.has(type)) {
       found.push(record);
       return;
     }
@@ -598,7 +665,11 @@ export function normaliseCatalogue(
 
     for (const field of ["jsonLd", "jsonld", "structuredData", "html", "markdown", "text", "content"]) {
       const value = item[field];
-      if (typeof value !== "string" || !value.includes("Product")) continue;
+      if (typeof value !== "string") continue;
+      // A page that publishes only a Service or an OfferCatalog of plans contains
+      // neither the word "Product" — matching on it alone skipped those pages
+      // before they were ever parsed.
+      if (!/(Product|Service|Offer)/.test(value)) continue;
       const blocks = field === "jsonLd" || field === "jsonld" || field === "structuredData"
         ? [value]
         : jsonLdBlocks(value);
@@ -617,4 +688,9 @@ export function normaliseCatalogue(
 /** A stock state that is safe to write to the `stock_state` enum. */
 export function safeStockState(value: string): StockState {
   return (STOCK_STATES as string[]).includes(value) ? (value as StockState) : "in_stock";
+}
+
+/** An item kind that is safe to write to the `item_kind` enum. */
+export function safeItemKind(value: string): ItemKind {
+  return (ITEM_KINDS as string[]).includes(value) ? (value as ItemKind) : "product";
 }

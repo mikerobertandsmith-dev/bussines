@@ -11,7 +11,7 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.appendChild(container);
   window.localStorage.clear();
-  window.location.hash = "#/suppliers";
+  window.location.hash = "#/competition";
   root = createRoot(container);
 });
 
@@ -66,15 +66,6 @@ function dialogButton(label: string) {
   );
 }
 
-/** The big number in a named `Stat` card, e.g. "Suppliers monitored". */
-function statValue(label: string): number {
-  const labelEl = Array.from(container.querySelectorAll("p")).find(
-    (p) => (p.textContent ?? "").trim() === label,
-  );
-  const card = labelEl?.closest("section");
-  return Number(card?.querySelector("p.text-2xl")?.textContent ?? "");
-}
-
 async function render() {
   await act(async () => {
     root.render(<App />);
@@ -99,19 +90,18 @@ function pullToRefresh() {
 }
 
 describe("Market Watch app", () => {
-  it("shows the supplier page with inventory changes and the shared refresh surface", async () => {
+  it("shows the competition page with the shared refresh surface", async () => {
     const content = await render();
-    expect(content).toContain("Supplier updates");
-    expect(content).toContain("Latest inventory from your suppliers");
-    expect(content).toContain("Velvet Matte Lip Kit");
+    expect(content).toContain("Competition watch");
+    expect(content).toContain("GlowMart Beauty");
 
-    // Monitored suppliers live in their own Watching section, above the table.
+    // Monitored competitors live in their own Watching section, above the table.
     expect(text()).toContain("Watching");
     // The reload control is the shared drag-down surface, not a button per page.
     expect(container.querySelector('[aria-label^="Pull down to refresh"]')).not.toBeNull();
   });
 
-  it("refreshes all three monitoring pages from one drag-down gesture", async () => {
+  it("refreshes the monitoring pages from one drag-down gesture", async () => {
     await render();
 
     // One pull runs the workspace-wide scans, reads every watched site's own
@@ -121,9 +111,9 @@ describe("Market Watch app", () => {
     expect(text()).toContain("live scans ran");
     expect(text()).toContain("site scans ran");
 
-    // The other two pages read the same workspace, so they are already current:
-    // a second pull inside the window animates, then says so instead of re-scanning.
-    click(findByText("button", "Competition"));
+    // The other pages read the same workspace, so they are already current: a
+    // second pull inside the window animates, then says so instead of re-scanning.
+    click(findByText("button", "My Business"));
     expect(container.querySelector('[aria-label^="Pull down to refresh"]')).not.toBeNull();
     pullToRefresh();
     await act(async () => {});
@@ -219,7 +209,7 @@ describe("Market Watch app", () => {
   it("keeps the dashboard reachable in demo mode without auth keys", async () => {
     await render();
     expect(text()).toContain("Demo data");
-    expect(text()).toContain("Supplier updates");
+    expect(text()).toContain("Competition watch");
     expect(container.querySelector("nav")).not.toBeNull();
   });
 
@@ -321,7 +311,7 @@ describe("Market Watch app", () => {
 
     // Screen gallery renders the workspace layouts with sample data.
     expect(content).toContain("Every screen, before you sign up.");
-    expect(content).toContain("Suppliers monitored");
+    expect(content).toContain("Their traffic");
     expect(content).toContain("Competition");
   });
 
@@ -617,76 +607,6 @@ describe("Market Watch app", () => {
     expect(findByExactText("button", "Halo Beauty Co")).toBeUndefined();
     // The page falls back to a competitor that still exists.
     expect(text()).toContain("GlowMart Beauty");
-  });
-
-  it("adds, edits and removes a supplier from the suppliers page", async () => {
-    await render();
-    expect(text()).toContain("Lumière Cosmetics Supply");
-    const monitored = statValue("Suppliers monitored");
-
-    // Add: an empty form is refused inline, then a full one is the last pill.
-    click(findByText("button", "Add supplier"));
-    let dialog = activeDialog();
-    click(dialogButton("Add supplier"));
-    await act(async () => {});
-    expect(activeDialog().textContent ?? "").toContain("Add a name and a website address");
-
-    dialog = activeDialog();
-    typeInto(
-      dialog.querySelector<HTMLInputElement>('input[placeholder="e.g. Lumière Cosmetics Supply"]'),
-      "Test Packaging Co",
-    );
-    // A catalogue path is reduced to the host — the site is what gets scanned.
-    typeInto(
-      dialog.querySelector<HTMLInputElement>('input[placeholder="supplier.com"]'),
-      "https://testpackaging.com/catalogue",
-    );
-    click(dialogButton("Add supplier"));
-    await act(async () => {});
-
-    expect(text()).toContain("Test Packaging Co is now being watched.");
-    expect(statValue("Suppliers monitored")).toBe(monitored + 1);
-
-    // Edit: the pencil beside the pill opens the same form, prefilled.
-    click(container.querySelector('button[aria-label="Edit Test Packaging Co"]'));
-    dialog = activeDialog();
-    expect(dialog.textContent ?? "").toContain("Edit Test Packaging Co");
-    typeInto(
-      dialog.querySelector<HTMLInputElement>('input[placeholder="e.g. Lumière Cosmetics Supply"]'),
-      "Test Packaging Ltd",
-    );
-    click(dialogButton("Save changes"));
-    await act(async () => {});
-    expect(text()).toContain("Test Packaging Ltd updated");
-
-    // The confirm separates their detected items from our own catalogue, which
-    // survives the delete, and only deletes on the second click.
-    click(container.querySelector('button[aria-label="Edit Lumière Cosmetics Supply"]'));
-    dialog = activeDialog();
-    click(dialogButton("Remove supplier"));
-    await act(async () => {});
-    expect(activeDialog().textContent ?? "").toContain("Stop watching Lumière Cosmetics Supply?");
-    expect(activeDialog().textContent ?? "").toContain("This also deletes the");
-    expect(activeDialog().textContent ?? "").toContain("catalogue and ad briefs stay");
-    click(dialogButton("Keep watching"));
-    await act(async () => {});
-    expect(text()).toContain("Lumière Cosmetics Supply");
-
-    click(container.querySelector('button[aria-label="Edit Test Packaging Ltd"]'));
-    dialog = activeDialog();
-    click(dialogButton("Remove supplier"));
-    await act(async () => {});
-    click(dialogButton("Remove supplier"));
-    await act(async () => {});
-    expect(text()).toContain("Test Packaging Ltd");
-    expect(activeDialog().textContent ?? "").toContain("Delete permanently");
-
-    click(dialogButton("Delete permanently"));
-    await act(async () => {});
-    expect(text()).toContain("Stopped watching Test Packaging Ltd");
-    // The pill and its manage button are gone (the toast still names it).
-    expect(container.querySelector('button[aria-label="Edit Test Packaging Ltd"]')).toBeNull();
-    expect(statValue("Suppliers monitored")).toBe(monitored);
   });
 
   it("proposes a competitor's socials from their own site, saving only what is ticked", async () => {

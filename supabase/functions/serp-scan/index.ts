@@ -15,6 +15,7 @@ import {
 import {
   buildProfileChecks,
   citationOf,
+  citationWeight,
   fetchAiOverview,
   findOrganicResult,
   hostnameOf,
@@ -57,7 +58,14 @@ import {
  * source) per term, `my_metrics.kind = 'geo_visibility'` as one point per day, and
  * `geo_score` on the business row. The My Business GEO tile and the prompts table
  * read those, which is what makes "AI visibility" a measurement rather than a
- * blurb. Google AI Overview is one assistant, not all of them: the engine column
+ * blurb.
+ *
+ * `geo_score` is **coverage across the terms assessed**, weighted by how
+ * prominently each answer cited us (`_shared/serpapi.ts` `citationWeight`): a term
+ * whose answer cites us scores by its prominence, a term Google answers with no AI
+ * overview scores nothing, and a term we could not read is excluded. That replaced
+ * `cited ÷ overviews read`, which scored 100 whenever the one overview we happened
+ * to read named us and sat frozen whenever a run read none. Google AI Overview is one assistant, not all of them: the engine column
  * says which one answered, and no other assistant is claimed.
  *
  * Deploy with `--no-verify-jwt` — the bearer token is a Clerk token, verified here.
@@ -138,11 +146,20 @@ Deno.serve(async (req) => {
       0,
       Math.floor(budget.remaining - 1 - keywords.length * devices.length),
     );
-    /** Bodies actually read — the denominator of the GEO score. */
+    /** Bodies actually read back. */
     let overviewCalls = 0;
     /** Body requests made, read or not: these are what the provider bills. */
     let overviewAttempts = 0;
     let citedCount = 0;
+    /**
+     * Terms Google served no AI answer for. Assessed — the term was checked and
+     * nothing cited us because there was nothing to cite us in — so it belongs in
+     * the score's denominator. It was left out when that denominator was "overviews
+     * read", which is what made one cited answer out of one read score 100.
+     */
+    let noOverviewCount = 0;
+    /** Summed prominence of our citations, weighted per term by `citationWeight`. */
+    let geoWeight = 0;
     const overviewCapped = { at: false };
 
     const startedAt = new Date().toISOString();
@@ -259,34 +276,43 @@ Deno.serve(async (req) => {
 
         // The AI answer for this term, read once — on the desktop pass — because an
         // overview belongs to the query rather than to the device we asked from.
-        if (device === "desktop" && response.ai_overview?.page_token) {
-          if (overviewAttempts >= overviewAllowance) {
-            overviewCapped.at = true;
-          } else {
-            overviewAttempts += 1;
-            const overview = await fetchAiOverview(String(response.ai_overview.page_token));
-            // A token Google will not replay is a query we could not read, not a query
-            // that failed to cite us. Counting it as "read, not cited" dragged the
-            // score to zero on terms where we simply never saw the answer.
-            if (overview) {
-              overviewCalls += 1;
-              const citation = citationOf(overview, domain, brandName);
-              if (citation.cited) citedCount += 1;
-              // `sources` rides in `volume`: it is the count of places the answer drew
-              // on, which is what tells a user how hard-won a citation is.
-              geoRows.push({
-                business_id: businessId,
-                keyword,
-                kind: "geo",
-                engine: AI_OVERVIEW_ENGINE,
-                volume: citation.sources,
-                // 0 means "not cited", so any positive value reads as cited and keeps
-                // which source was ours when the answer listed one.
-                position: citation.cited ? citation.position || 1 : 0,
-                change: 0,
-                week_of: checkedAt.slice(0, 10),
-              });
+        if (device === "desktop") {
+          if (response.ai_overview?.page_token) {
+            if (overviewAttempts >= overviewAllowance) {
+              overviewCapped.at = true;
+            } else {
+              overviewAttempts += 1;
+              const overview = await fetchAiOverview(String(response.ai_overview.page_token));
+              // A token Google will not replay is a query we could not read, not a query
+              // that failed to cite us. Counting it as "read, not cited" dragged the
+              // score to zero on terms where we simply never saw the answer — and
+              // counting it in the denominator at all is why an unread term is left out
+              // of the coverage below rather than scored as a miss.
+              if (overview) {
+                overviewCalls += 1;
+                const citation = citationOf(overview, domain, brandName);
+                if (citation.cited) citedCount += 1;
+                geoWeight += citationWeight(citation);
+                // `sources` rides in `volume`: it is the count of places the answer drew
+                // on, which is what tells a user how hard-won a citation is.
+                geoRows.push({
+                  business_id: businessId,
+                  keyword,
+                  kind: "geo",
+                  engine: AI_OVERVIEW_ENGINE,
+                  volume: citation.sources,
+                  // 0 means "not cited", so any positive value reads as cited and keeps
+                  // which source was ours when the answer listed one.
+                  position: citation.cited ? citation.position || 1 : 0,
+                  change: 0,
+                  week_of: checkedAt.slice(0, 10),
+                });
+              }
             }
+          } else {
+            // Google answered this term without an AI overview at all: the answer
+            // surfaces nobody, so we are not visible on it. It is an assessed miss.
+            noOverviewCount += 1;
           }
         }
 
@@ -374,11 +400,20 @@ Deno.serve(async (req) => {
       if (pruneError) throw new HttpError(500, pruneError.message);
     }
 
+    // The score is **coverage across the terms actually assessed**: a term whose AI
+    // answer cited us counts for as prominently as it was cited, a term Google
+    // answered without an AI overview counts for nothing, and a term whose answer
+    // existed but could not be read (the monthly budget stopped the reads) is left
+    // out of the denominator entirely. Coverage over the tracked set is what makes
+    // the figure stable — the old `cited ÷ overviews read` swung from 0 to 100 on
+    // whether a single overview happened to mention us.
+    const geoChecked = overviewCalls + noOverviewCount;
+    const geoScore = geoChecked ? Math.round((geoWeight / geoChecked) * 100) : 0;
+
     // One point per day, replaced rather than stacked: re-running the scan is the
     // normal way to fix a bad reading, and a second point for the same day would
     // draw a spike that never happened.
-    const geoScore = overviewCalls ? Math.round((citedCount / overviewCalls) * 100) : 0;
-    if (overviewCalls) {
+    if (geoChecked) {
       const day = checkedAt.slice(0, 10);
       const { error } = await db.from("my_metrics").insert({
         business_id: businessId,
@@ -429,9 +464,11 @@ Deno.serve(async (req) => {
         rankings_checked_at: checkedAt,
       };
 
-      // Only when Google actually answered with an overview. Writing 0 here would
-      // report "cited nowhere" for a run that found no AI answer to be cited in.
-      if (overviewCalls) {
+      // Written whenever the pass assessed a term, not only when it read an
+      // overview. A term Google answers without an AI overview is a term where the
+      // answer surfaces nobody, so leaving the stored score untouched there froze the
+      // tile at whatever the last overview-bearing run happened to say.
+      if (geoChecked) {
         patch.previous_geo_score = business.geo_score ?? null;
         patch.geo_score = geoScore;
       }
@@ -486,7 +523,9 @@ Deno.serve(async (req) => {
         overviewsRead: overviewCalls,
         overviewsRequested: overviewAttempts,
         cited: citedCount,
-        score: overviewCalls ? geoScore : null,
+        /** Terms assessed for an AI answer — the score's denominator. */
+        checked: geoChecked,
+        score: geoChecked ? geoScore : null,
         /** True when the monthly budget stopped the overview reads early. */
         capped: overviewCapped.at,
       },

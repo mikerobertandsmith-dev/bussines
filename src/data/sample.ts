@@ -1,7 +1,6 @@
 import { adAssets, competitorReviewGaps, geoVisibility, inventoryRecommendations, keywordIdeas, latestReviewScan, localPackRankings, localProfileHealth, myBusiness, reviewConnections, reviewSources, serpRankings, shareOfVoice, socialScores, topGeoKeywords, topSeoKeywords, weeklyReports } from "./business";
 import { clients, mailAccount, sentMessages } from "./clients";
 import { competitors } from "./competitors";
-import { suppliers, supplierItems } from "./suppliers";
 import { deliveredAds, inventoryItems, promotionBriefs, samplePublishJobs, sampleSocialAccounts } from "./commerce";
 import { socialMonitorTargets, socialPosts } from "./social";
 import { daysAgo, daysAhead } from "../lib/format";
@@ -54,7 +53,7 @@ export const sampleProfile: BusinessProfile = {
   timezone: "Africa/Nairobi (GMT+3)",
   teamSize: "2-10",
   primaryGoal: "Beat competitors on price and stock alerts",
-  goals: ["win more traffic", "never miss a supplier price drop", "keep clients updated"],
+  goals: ["win more traffic", "never miss a rival price drop", "keep clients updated"],
   adPlatforms: ["Meta Ads", "Google Ads", "TikTok Ads"],
   socialHandles: { Instagram: "@yourretailbrand", TikTok: "@yourretailbrand" },
   notificationEmail: mailAccount.loginEmail,
@@ -93,8 +92,6 @@ export function sampleWorkspace(profile: BusinessProfile = sampleProfile): Works
       topServers: myBusiness.topServers,
       geoVisibility: geoVisibility,
     }),
-    suppliers,
-    supplierItems,
     competitors,
     clients,
     mailAccount,

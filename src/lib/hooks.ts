@@ -27,7 +27,6 @@ export function usePersistentState<T>(key: string, initial: T) {
 }
 
 export type RouteId =
-  | "suppliers"
   | "competition"
   | "clients"
   | "business"
@@ -37,7 +36,6 @@ export type RouteId =
   | "notifications";
 
 const ROUTES: RouteId[] = [
-  "suppliers",
   "competition",
   "clients",
   "business",
@@ -49,7 +47,7 @@ const ROUTES: RouteId[] = [
 
 function parseHash(): RouteId {
   const raw = window.location.hash.replace(/^#\/?/, "");
-  return (ROUTES.find((r) => r === raw) ?? "suppliers") as RouteId;
+  return (ROUTES.find((r) => r === raw) ?? "competition") as RouteId;
 }
 
 /** Screens anyone can see before they sign in. */
@@ -102,7 +100,7 @@ export function usePublicRoute() {
 
 export function useHashRoute() {
   const [route, setRoute] = useState<RouteId>(() =>
-    typeof window === "undefined" ? "suppliers" : parseHash(),
+    typeof window === "undefined" ? "competition" : parseHash(),
   );
 
   useEffect(() => {

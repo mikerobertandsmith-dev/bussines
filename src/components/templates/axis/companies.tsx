@@ -4,12 +4,10 @@ import {
   Globe2,
   MessageSquareQuote,
   TrendingUp,
-  Truck,
   type LucideIcon,
 } from "lucide-react";
 
 const sources: { name: string; detail: string; icon: LucideIcon }[] = [
-  { name: "Supplier catalogues", detail: "Buy prices, SKUs, stock", icon: Truck },
   { name: "Competitor sites", detail: "Promos and range moves", icon: Binoculars },
   { name: "Search rankings", detail: "Tracked terms weekly", icon: Globe2 },
   { name: "AI answers", detail: "Who the models quote", icon: Bot },

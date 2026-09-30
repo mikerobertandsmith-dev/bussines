@@ -14,13 +14,13 @@ export default function Hero({ preview }: { preview?: ReactNode }) {
     >
       <section className="flex w-full max-w-7xl flex-col items-center justify-between gap-6 lg:max-w-6xl lg:flex-row">
         <p className="text-center text-3xl tracking-tighter max-md:font-medium md:text-5xl lg:max-w-lg lg:text-left lg:text-6xl xl:max-w-2xl xl:text-7xl">
-          Know what your suppliers and competitors did{" "}
+          Know what your competitors did{" "}
           <span className="text-primary">before your customers do</span>
         </p>
         <section className="flex flex-col gap-8">
           <p className="max-w-xl text-center text-base leading-relaxed text-muted-foreground md:text-xl lg:max-w-md lg:text-left">
-            Market Watch scans the supplier sites you buy from, the rivals you sell against and
-            your own search visibility, then tells you what changed and what to do about it.
+            Market Watch scans the rivals you sell against and your own search visibility, then
+            tells you what changed and what to do about it.
           </p>
           <div className="flex flex-row gap-2">
             <Button
@@ -42,7 +42,7 @@ export default function Hero({ preview }: { preview?: ReactNode }) {
             </Button>
           </div>
           <p className="text-center text-xs text-muted-foreground lg:text-left">
-            No card to start · One setup wizard · Works with your existing suppliers
+            No card to start · One setup wizard · Works alongside your existing tools
           </p>
         </section>
       </section>

@@ -6,7 +6,7 @@ export const mailAccount: MailAccount = {
   loginEmail: "watch@yourretailbrand.com",
   replyTo: "alerts@yourretailbrand.com",
   secondaryEmail: "owner@yourretailbrand.com",
-  signature: "— Market Watch Desk · Supplier & competitor alerts for your retail brand",
+  signature: "— Market Watch Desk · Market alerts for your retail brand",
   timezone: "Africa/Nairobi (GMT+3)",
   dailyDigest: true,
   sendFrequency: "weekly",
@@ -128,7 +128,7 @@ export const clients: Client[] = [
     messageTypes: ["weekly_report", "platform_info"],
     openRate: 0,
     monthlyFee: 0,
-    notes: "Trial running on beauty + phone supplier feeds.",
+    notes: "Trial running on beauty + phone competitor feeds.",
   },
 ];
 

@@ -517,7 +517,7 @@ Do this once with a catalogue actor set, once with the slot empty, and once with
       stays at 0. Put `APIFY_CONTACTS_ACTOR_ID` back — competitor discovery is off without it.
 
 - [ ] **A second pull finds only what moved.** Pull again after the window
-      (`PULL_REFRESH_INTERVAL_MS`, 20 minutes — or clear
+      (`PULL_REFRESH_INTERVAL_MS`, 10 minutes — or clear
       `localStorage['workspace:pull-refresh-at']`) and expect `changes` to be 0 or small — **not** the
       whole catalogue again. A product re-read unchanged must not appear as `new_product`:
 

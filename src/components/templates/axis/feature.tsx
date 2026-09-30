@@ -2,9 +2,9 @@ import { motion } from "motion/react";
 
 const features = [
   {
-    title: "Every supplier change, ranked",
+    title: "Every competitor change, ranked",
     description:
-      "Buy prices, new SKUs, restocks and promotions captured from the sites you already buy from.",
+      "New SKUs, price moves, restocks and promotions captured from the rivals you track.",
   },
   {
     title: "The playbook behind each move",
@@ -37,7 +37,7 @@ export default function Feature() {
           Built for the desk you actually run
         </h2>
         <p className="mt-4 text-sm text-muted-foreground sm:text-lg">
-          Supplier, competitor and client monitoring in one place — not six browser tabs
+          Competitor and client monitoring in one place — not six browser tabs
         </p>
       </div>
 
@@ -56,14 +56,14 @@ export default function Feature() {
         <section className="relative flex justify-center">
           <img
             src="/images/templates/axis/feature.webp"
-            alt="The Market Watch workspace showing supplier changes"
+            alt="The Market Watch workspace showing competitor changes"
             width={720}
             height={480}
             className="h-auto w-full rounded-2xl max-md:hidden dark:hidden"
           />
           <img
             src="/images/templates/axis/feature-dark.webp"
-            alt="The Market Watch workspace showing supplier changes"
+            alt="The Market Watch workspace showing competitor changes"
             width={720}
             height={480}
             className="hidden h-auto w-full rounded-2xl max-md:hidden dark:block"
@@ -103,7 +103,7 @@ export default function Feature() {
         <section className="flex flex-col gap-4">
           <p className="text-center text-2xl text-foreground">Built for the desk you actually run</p>
           <p className="text-center text-muted-foreground">
-            Supplier, competitor and client monitoring in one place — not six browser tabs
+            Competitor and client monitoring in one place — not six browser tabs
           </p>
 
           <div className="flex flex-col">

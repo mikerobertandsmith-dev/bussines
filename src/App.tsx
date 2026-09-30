@@ -8,7 +8,6 @@ import { authEnabled } from "./lib/env";
 import { useHashRoute, usePublicRoute } from "./lib/hooks";
 import { RefreshProvider } from "./lib/refresh";
 import { useWorkspace, WorkspaceLoading, WorkspaceProvider } from "./lib/workspace";
-import { SuppliersPage } from "./pages/SuppliersPage";
 import { CompetitionPage } from "./pages/CompetitionPage";
 import { ClientsPage } from "./pages/ClientsPage";
 import { BusinessPage } from "./pages/BusinessPage";
@@ -25,13 +24,8 @@ function AppShell() {
 
   return (
     <Layout route={route} navigate={navigate}>
-      {/* The three monitoring pages share one workspace, so they share one
-          drag-down refresh instead of a reload control each. */}
-      {route === "suppliers" ? (
-        <PullToRefresh>
-          <SuppliersPage />
-        </PullToRefresh>
-      ) : null}
+      {/* The monitoring pages share one workspace, so they share one drag-down
+          refresh instead of a reload control each. */}
       {route === "competition" ? (
         <PullToRefresh>
           <CompetitionPage />

@@ -383,14 +383,20 @@ export interface SerpScanResult {
   placeId: string;
   /**
    * The AI-overview pass: how many answers were read, how many cited us, and the
-   * resulting 0–100 GEO score (`null` when Google served no overview to read).
+   * resulting 0–100 GEO score (`null` when no term could be assessed).
    */
   geo?: {
-    /** Bodies read back successfully — the denominator of `score`. */
+    /** Bodies read back successfully. */
     overviewsRead: number;
     /** Body requests made, read or not: what the provider billed. */
     overviewsRequested: number;
     cited: number;
+    /**
+     * Terms assessed for an AI answer — read overviews plus terms Google served no
+     * overview for. This is the denominator of `score`: coverage is measured against
+     * it, and a term whose answer existed but could not be read is excluded.
+     */
+    checked?: number;
     score: number | null;
     /** True when the monthly budget stopped the overview reads early. */
     capped: boolean;

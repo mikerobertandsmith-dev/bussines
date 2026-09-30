@@ -2,7 +2,7 @@ import { motion } from "motion/react";
 import Counter from "./counter";
 
 const stats = [
-  { name: "Supplier changes captured each week", value: 12, suffix: "K+" },
+  { name: "Competitor changes captured each week", value: 12, suffix: "K+" },
   { name: "Hours saved per month", value: 20, suffix: " hrs" },
   { name: "Signals in one ranked feed", value: 6, suffix: " sources" },
 ];
@@ -21,7 +21,7 @@ export default function Stats() {
           Monitoring is a job nobody has time for
         </h2>
         <p className="max-w-md text-sm text-muted-foreground sm:text-base">
-          Checking suppliers, competitors and your own visibility by hand costs hours every week.
+          Checking competitors and your own visibility by hand costs hours every week.
         </p>
       </div>
 

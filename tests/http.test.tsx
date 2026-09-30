@@ -7,9 +7,8 @@ import { HttpError } from "../supabase/functions/_shared/errors.ts";
  * The refusal bodies below are **verbatim** from the live providers. The Apify one
  * is what every Apify-backed panel returned on 2026-09-29, and it is the reason
  * this function exists: it arrived as `Provider request failed (403)` with the
- * explanation stripped, so supplier catalogue reads, competitor inventory, social,
- * traffic and advertising all looked like separate broken features when they were
- * one spent allowance.
+ * explanation stripped, so competitor inventory, social, traffic and advertising
+ * all looked like separate broken features when they were one spent allowance.
  */
 const APIFY_LIMIT =
   '{\n  "error": {\n    "type": "platform-feature-disabled",\n    "message": "Monthly usage hard limit exceeded"\n  }\n}';

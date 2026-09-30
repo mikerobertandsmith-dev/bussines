@@ -168,26 +168,20 @@ describe("Onboarding wizard", () => {
     // 2. Presence
     typeIntoPlaceholder("yourstore.com", "glowhouse.com");
     click("Continue");
-    expect(container.textContent).toContain("supplier sites should we watch");
-
-    // 3. Suppliers
-    typeIntoPlaceholder("e.g. Lumière Cosmetics Supply", "Lumière Supply");
-    typeIntoPlaceholder("https://supplier.com/wholesale", "https://supply.lumiere.com");
-    click("Continue");
     expect(container.textContent).toContain("competitors do you want to track");
 
-    // 4. Competitors — leave blank, it is optional
+    // 3. Competitors — leave blank, it is optional
     click("Continue");
     expect(container.textContent).toContain("messages they receive");
 
-    // 5. Clients + messaging
+    // 4. Clients + messaging
     click("Add customer");
     typeIntoPlaceholder("e.g. Aisha Bello", "Aisha Bello");
     typeIntoPlaceholder("name@theirstore.com", "buyer@retailer.com");
     click("Continue");
     expect(container.textContent).toContain("What does winning look like");
 
-    // 6. Finish
+    // 5. Finish
     click("Finish setup");
     await act(async () => {});
 
@@ -196,9 +190,6 @@ describe("Onboarding wizard", () => {
     expect(payload.brandName).toBe("Glow House Store");
     expect(payload.niche).toBe("vegan cosmetics");
     expect(payload.primaryDomain).toBe("glowhouse.com");
-    expect(payload.suppliers).toHaveLength(1);
-    expect(payload.suppliers[0].name).toBe("Lumière Supply");
-    expect(payload.suppliers[0].website).toBe("https://supply.lumiere.com");
     expect(payload.competitors).toHaveLength(0);
     expect(payload.seedClients).toHaveLength(1);
     expect(payload.seedClients[0].email).toBe("buyer@retailer.com");
@@ -212,9 +203,6 @@ describe("Onboarding wizard", () => {
     typeIntoPlaceholder("e.g. vegan cosmetics", "vegan cosmetics");
     click("Continue");
     typeIntoPlaceholder("yourstore.com", "glowhouse.com");
-    click("Continue");
-    typeIntoPlaceholder("e.g. Lumière Cosmetics Supply", "Lumière Supply");
-    typeIntoPlaceholder("https://supplier.com/wholesale", "https://supply.lumiere.com");
     click("Continue");
 
     // Competitors. The social section is collapsed until it is asked for, so the
@@ -273,9 +261,6 @@ describe("Onboarding wizard", () => {
     click("Continue");
     typeIntoPlaceholder("yourstore.com", "glowhouse.com");
     click("Continue");
-    typeIntoPlaceholder("e.g. Lumière Cosmetics Supply", "Lumière Supply");
-    typeIntoPlaceholder("https://supplier.com/wholesale", "https://supply.lumiere.com");
-    click("Continue");
 
     // Competitors. The read is collapsed behind its own toggle, so the step still
     // opens as names and websites — the automatic path is the second way in, not
@@ -325,9 +310,6 @@ describe("Onboarding wizard", () => {
     typeIntoPlaceholder("e.g. vegan cosmetics", "vegan cosmetics");
     click("Continue");
     typeIntoPlaceholder("yourstore.com", "glowhouse.com");
-    click("Continue");
-    typeIntoPlaceholder("e.g. Lumière Cosmetics Supply", "Lumière Supply");
-    typeIntoPlaceholder("https://supplier.com/wholesale", "https://supply.lumiere.com");
     click("Continue");
 
     // The section is never opened, which is a legitimate answer: monitoring a

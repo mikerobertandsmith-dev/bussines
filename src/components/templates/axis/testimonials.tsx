@@ -9,8 +9,8 @@ const testimonials = [
     handle: "@priyabuyer",
     content: (
       <>
-        A supplier dropped a buy price 16% overnight and I saw it before the
-        listing even refreshed. That one alert paid for the year.
+        A rival dropped a price 16% overnight and I saw it before the listing even
+        refreshed. That one alert paid for the year.
       </>
     ),
     verified: true,
@@ -21,8 +21,8 @@ const testimonials = [
     handle: "@danielretail",
     content: (
       <>
-        I used to open eleven supplier tabs every morning. Now it is one feed and a
-        short list of things that need a decision.
+        I used to open eleven competitor tabs every morning. Now it is one feed and
+        a short list of things that need a decision.
       </>
     ),
   },
@@ -81,8 +81,8 @@ export default function Testimonials() {
           From the people running the desk.
         </h2>
         <p className="mx-auto mt-4 max-w-2xl text-base text-muted-foreground">
-          Retail teams using Market Watch to catch supplier, competitor and visibility
-          changes before they cost a sale.
+          Retail teams using Market Watch to catch competitor and visibility changes
+          before they cost a sale.
         </p>
       </div>
 

@@ -11,7 +11,7 @@ export const INDUSTRIES = [
 
 export const GOALS = [
   "Win more organic traffic",
-  "Never miss a supplier price drop",
+  "Never miss a competitor price move",
   "React faster to competitor promotions",
   "Keep clients updated automatically",
   "Grow social following",
@@ -53,10 +53,10 @@ export const PLATFORM_TYPES = [
 ];
 
 export const MESSAGE_TYPES: { value: MessageType; label: string; hint: string }[] = [
-  { value: "new_stock", label: "New stock", hint: "Anything new or restocked at your suppliers" },
+  { value: "new_stock", label: "New stock", hint: "Anything new or restocked at your competitors" },
   { value: "two_day_checkin", label: "2-day check-in", hint: "Short status note every second day" },
   { value: "platform_info", label: "Platform info", hint: "New features and data added to their dashboard" },
-  { value: "deals", label: "Deals", hint: "Live supplier and platform deals worth buying" },
+  { value: "deals", label: "Deals", hint: "Live competitor and platform deals worth buying" },
   { value: "competitor_alert", label: "Competitor alert", hint: "Their price, stock and ad moves" },
   { value: "review_update", label: "Review update", hint: "New reviews and what to answer" },
   { value: "weekly_report", label: "Weekly report", hint: "SEO, GEO, traffic and actions summary" },

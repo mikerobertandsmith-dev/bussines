@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { SignIn, SignUp } from "@clerk/clerk-react";
-import { BarChart3, Binoculars, Mail, ShieldCheck, Truck } from "lucide-react";
+import { BarChart3, Binoculars, Mail, ShieldCheck } from "lucide-react";
 import { configSummary } from "../lib/env";
 
 /**
@@ -91,23 +91,22 @@ export function LoginPage({
             </span>
             <div>
               <p className="text-base font-semibold text-white">Market Watch</p>
-              <p className="text-xs text-slate-400">Supplier &amp; competitor monitoring</p>
+              <p className="text-xs text-slate-400">Competitor monitoring</p>
             </div>
           </div>
 
           <h1 className="mt-12 max-w-md text-3xl font-semibold leading-tight text-white">
-            Know what your suppliers and competitors did — before your customers do.
+            Know what your competitors did — before your customers do.
           </h1>
           <p className="mt-4 max-w-md text-sm leading-relaxed text-slate-400">
             Create your account, tell us about your business once, and your dashboard fills with
-            supplier stock changes, competitor price moves, ad signals, review drops and your own SEO
-            and GEO scores.
+            competitor price moves, new listings, ad signals, review drops and your own SEO and GEO
+            scores.
           </p>
 
           <ul className="mt-10 space-y-4">
             {[
-              { icon: <Truck size={16} />, title: "Supplier feeds", body: "New inventory, restocks and buy-price changes on every supplier site you watch." },
-              { icon: <Binoculars size={16} />, title: "Competitor watch", body: "Their traffic, keyword gaps, social channels, ads and customer reviews." },
+              { icon: <Binoculars size={16} />, title: "Competitor watch", body: "Their traffic, keyword gaps, social channels, ads, customer reviews and new listings." },
               { icon: <BarChart3 size={16} />, title: "Your own scores", body: "SEO, GEO, traffic, industry rank and the inventory you should stock next." },
               { icon: <Mail size={16} />, title: "Client messaging", body: "Scheduled alerts and check-ins to your own customers, on your cadence." },
             ].map((item) => (
@@ -186,7 +185,7 @@ export function LoginPage({
 
           <p className="mt-4 text-center text-[11px] text-slate-500">
             After signing up you will be asked a few questions about your business so the monitoring
-            starts on the right suppliers, competitors and clients.
+            starts on the right competitors and clients.
           </p>
         </div>
       </main>

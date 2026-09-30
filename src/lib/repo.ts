@@ -17,6 +17,7 @@ import type {
   IntegrationConnection,
   IntegrationProvider,
   InventoryRecommendation,
+  ItemKind,
   KeywordIdea,
   LocalPackEntry,
   LocalPackRanking,
@@ -44,9 +45,6 @@ import type {
   SocialPublishJob,
   SocialChannel,
   SocialScore,
-  Supplier,
-  SupplierInput,
-  SupplierItem,
   TrafficPoint,
   WeeklyReport,
   WorkspaceData,
@@ -117,7 +115,7 @@ export async function fetchBusiness(ownerUserId: string): Promise<BusinessProfil
 
 /**
  * Creates the tenant row plus every source the user listed during onboarding,
- * so the pages have their real suppliers, competitors and clients from day one.
+ * so the pages have their real competitors and clients from day one.
  */
 export async function createWorkspaceFromOnboarding(
   ownerUserId: string,
@@ -159,22 +157,6 @@ export async function createWorkspaceFromOnboarding(
   const businessId = business.id as string;
   const now = new Date().toISOString();
 
-  const supplierPayload = input.suppliers
-    .filter((s) => s.name.trim())
-    .map((s) => ({
-      business_id: businessId,
-      name: s.name.trim(),
-      website: s.website.trim(),
-      category: s.category || input.niche,
-      cadence: s.cadence || input.supplierCadence,
-      next_scan_at: nextScanFrom(s.cadence || input.supplierCadence),
-    }));
-
-  if (supplierPayload.length) {
-    const { error: supplierError } = await db.from("suppliers").insert(supplierPayload);
-    if (supplierError) throw new Error(supplierError.message);
-  }
-
   // Inserted one at a time, and read back, because a competitor's social profiles
   // have to hang off a row that exists — `competitor_social` carries a
   // `competitor_id`. A bulk insert would not tell us which id belongs to which
@@ -189,7 +171,7 @@ export async function createWorkspaceFromOnboarding(
         business_id: businessId,
         name: competitor.name.trim(),
         website: competitor.website.trim(),
-        cadence: competitor.cadence || input.supplierCadence,
+        cadence: competitor.cadence || "daily",
         notes: competitor.category ? `Category: ${competitor.category}` : null,
       })
       .select()
@@ -244,7 +226,7 @@ export async function createWorkspaceFromOnboarding(
 
   await db.from("scan_runs").insert({
     business_id: businessId,
-    source_type: "supplier",
+    source_type: "competitor",
     source_name: "Onboarding baseline scan",
     status: "queued",
     started_at: now,
@@ -260,8 +242,6 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
   const id = profile.id;
 
   const [
-    suppliersRes,
-    supplierItemsRes,
     competitorsRes,
     metricsRes,
     socialRes,
@@ -301,8 +281,6 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     socialAccountsRes,
     publishJobsRes,
   ] = await Promise.all([
-    db.from("suppliers").select("*").eq("business_id", id).order("name"),
-    db.from("supplier_items").select("*").eq("business_id", id).order("detected_at", { ascending: false }).limit(300),
     db.from("competitors").select("*").eq("business_id", id).order("monthly_visits", { ascending: false }),
     db.from("competitor_metrics").select("*").eq("business_id", id),
     db.from("competitor_social").select("*").eq("business_id", id),
@@ -343,8 +321,6 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     db.from("social_publish_jobs").select("*").eq("business_id", id).order("created_at", { ascending: false }).limit(100),
   ]);
 
-  const supplierRows = rows<Row>(suppliersRes);
-  const supplierItemRows = rows<Row>(supplierItemsRes);
   const competitorRows = rows<Row>(competitorsRes);
   const metricRows = rows<Row>(metricsRes);
   const socialRows = rows<Row>(socialRes);
@@ -443,6 +419,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
         product: str(i.product),
         sku: str(i.sku),
         category: str(i.category),
+        kind: (i.kind ?? "product") as ItemKind,
         price: num(i.price),
         previousPrice: num(i.previous_price, num(i.price)),
         stock: (i.stock ?? "in_stock") as CompetitorItem["stock"],
@@ -586,24 +563,6 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     /* downloadUrl is filled with a signed Storage URL below */
     profile,
     metrics,
-    suppliers: supplierRows.map<Supplier>(mapSupplierRow),
-    supplierItems: supplierItemRows.map<SupplierItem>((i) => ({
-      id: i.id,
-      supplierId: i.supplier_id,
-      product: str(i.product),
-      sku: str(i.sku),
-      category: str(i.category),
-      price: num(i.price),
-      previousPrice: num(i.previous_price, num(i.price)),
-      stock: (i.stock ?? "in_stock") as SupplierItem["stock"],
-      previousStock: (i.previous_stock ?? "in_stock") as SupplierItem["stock"],
-      change: (i.change ?? "price_change") as SupplierItem["change"],
-      detectedAt: str(i.detected_at, new Date().toISOString()),
-      leadTimeDays: num(i.lead_time_days),
-      moq: num(i.moq),
-      url: str(i.url),
-      note: str(i.note) || undefined,
-    })),
     competitors,
     clients: clientRows.map<Client>((c) => ({
       id: c.id,
@@ -709,7 +668,6 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
       id: r.id,
       product: str(r.product),
       category: str(r.category),
-      supplierId: str(r.supplier_id),
       suggestedQty: num(r.suggested_qty),
       estimatedPrice: num(r.estimated_price),
       marginPct: num(r.margin_pct),
@@ -768,7 +726,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     buyList: rows<Row>(buyListRes).map((b) => str(b.recommendation_id)),
     scanRuns: scanRows.map<ScanRun>((r) => ({
       id: r.id,
-      sourceType: (r.source_type ?? "supplier") as ScanRun["sourceType"],
+      sourceType: (r.source_type ?? "competitor") as ScanRun["sourceType"],
       sourceId: r.source_id ?? null,
       sourceName: str(r.source_name),
       status: (r.status ?? "queued") as ScanRun["status"],
@@ -780,7 +738,7 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
     integrationConnections,
     providerStatus,
     apiUsage,
-    isSample: supplierRows.length === 0 && competitorRows.length === 0 && clientRows.length === 0,
+    isSample: competitorRows.length === 0 && clientRows.length === 0,
   };
 
   // Private bucket: hand back a short-lived signed URL per exported ad pack.
@@ -802,15 +760,6 @@ export async function loadWorkspace(profile: BusinessProfile): Promise<Workspace
 }
 
 /* --------------------------------------------------------------- mutations */
-
-export async function setSupplierCadence(supplierId: string, cadence: Cadence) {
-  const db = requireSupabase();
-  const { error } = await db
-    .from("suppliers")
-    .update({ cadence, next_scan_at: nextScanFrom(cadence) })
-    .eq("id", supplierId);
-  if (error) throw new Error(error.message);
-}
 
 export async function setCompetitorCadence(competitorId: string, cadence: Cadence) {
   const db = requireSupabase();
@@ -882,66 +831,6 @@ export async function updateCompetitorRow(competitorId: string, patch: Partial<C
 export async function deleteCompetitorRow(competitorId: string) {
   const db = requireSupabase();
   const { error } = await db.from("competitors").delete().eq("id", competitorId);
-  if (error) throw new Error(error.message);
-}
-
-/** Adds a supplier site to watch, with the same scheduling onboarding gives one. */
-export async function createSupplierRow(
-  businessId: string,
-  input: SupplierInput,
-): Promise<Supplier> {
-  const db = requireSupabase();
-  const { data, error } = await db
-    .from("suppliers")
-    .insert({
-      business_id: businessId,
-      name: input.name.trim(),
-      website: input.website.trim(),
-      category: input.category?.trim() || null,
-      cadence: input.cadence,
-      lead_time_days: input.leadTimeDays ?? null,
-      notes: input.notes?.trim() || null,
-      next_scan_at: nextScanFrom(input.cadence),
-    })
-    .select()
-    .single();
-  if (error || !data) throw new Error(error?.message ?? "Could not add that supplier.");
-
-  return mapSupplierRow(data as Row);
-}
-
-/**
- * Edits the columns the supplier form owns. A cadence change re-schedules the
- * next scan, the way `setSupplierCadence` does, so the two paths cannot drift.
- */
-export async function updateSupplierRow(supplierId: string, patch: Partial<SupplierInput>) {
-  const db = requireSupabase();
-  const payload: Row = {};
-  if (patch.name !== undefined) payload.name = patch.name.trim();
-  if (patch.website !== undefined) payload.website = patch.website.trim();
-  if (patch.category !== undefined) payload.category = patch.category.trim() || null;
-  if (patch.leadTimeDays !== undefined) payload.lead_time_days = patch.leadTimeDays;
-  if (patch.notes !== undefined) payload.notes = patch.notes.trim() || null;
-  if (patch.cadence !== undefined) {
-    payload.cadence = patch.cadence;
-    payload.next_scan_at = nextScanFrom(patch.cadence);
-  }
-  if (!Object.keys(payload).length) return;
-
-  const { error } = await db.from("suppliers").update(payload).eq("id", supplierId);
-  if (error) throw new Error(error.message);
-}
-
-/**
- * Stops watching a supplier site.
- *
- * `supplier_items` cascade away with it, but our own catalogue does not:
- * `inventory_recommendations.supplier_id` is `on delete set null`, so items and
- * briefs that referenced this supplier survive with the link cleared.
- */
-export async function deleteSupplierRow(supplierId: string) {
-  const db = requireSupabase();
-  const { error } = await db.from("suppliers").delete().eq("id", supplierId);
   if (error) throw new Error(error.message);
 }
 
@@ -1839,30 +1728,6 @@ function mapCompetitorBase(row: Row): Competitor {
     reviews: [],
     audience: [],
     newItems: [],
-  };
-}
-
-/** One supplier row, mapped onto the client shape. */
-function mapSupplierRow(row: Row): Supplier {
-  return {
-    id: row.id,
-    name: str(row.name),
-    website: str(row.website),
-    category: str(row.category),
-    cadence: (row.cadence ?? "daily") as Cadence,
-    lastScan: str(row.last_scan_at, str(row.created_at, new Date().toISOString())),
-    nextScan: str(row.next_scan_at, nextScanFrom((row.cadence ?? "daily") as Cadence)),
-    scanHealth: num(row.scan_health, 100),
-    accountManager: str(row.account_manager),
-    leadTimeDays: num(row.lead_time_days),
-    notes: str(row.notes) || undefined,
-    // See `mapCompetitorBase`: an uncollected run id on the row.
-    siteScanPending: Boolean(row.site_run_id),
-    // The attempt, kept apart from `lastScan` (which only moves on a read that
-    // produced something) so the page can say "read, nothing published" rather
-    // than showing a 0 with no reason and looking like a dead scan.
-    siteScanAt: str(row.site_scan_at) || undefined,
-    siteError: str(row.site_error) || undefined,
   };
 }
 

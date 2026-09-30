@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
 const features = [
-  "Supplier, competitor and traffic monitoring",
+  "Competitor and traffic monitoring",
   "SEO and AI-answer (GEO) scores, weekly",
   "One ranked notifications desk",
   "Client messaging from your own mailbox",
@@ -28,7 +28,7 @@ export default function Pricing() {
             Run your desk with less overhead
           </h2>
           <p className="mt-4 text-sm text-white/70 sm:text-base">
-            One subscription for every signal — supplier, competitor and visibility.
+            One subscription for every signal — competitor and visibility.
           </p>
         </div>
 

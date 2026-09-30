@@ -10,16 +10,19 @@ import { useWorkspace } from "./workspace";
  * re-running the whole sweep: inside the window the gesture reports the workspace
  * as current instead of calling any provider.
  *
- * Twenty minutes, not an hour: a catalogue crawl is a couple of minutes' work, so
- * an hour left the page showing a stale shelf for most of the time between reads,
- * and the scans are cheap enough that the spend this rations is small. The cap is
- * the only pacing there is — no cron runs these.
+ * Ten minutes, deliberately short: a catalogue crawl is a couple of minutes' work,
+ * so a longer window left the page showing a stale shelf for most of the time
+ * between reads, and the scans are cheap enough that the spend this rations is
+ * small. Ten is short enough that someone who has just changed something on a
+ * watched site can pull it through in the same sitting, while still keeping an
+ * idle drag from re-running the whole sweep. The cap is the only pacing there is —
+ * no cron runs these.
  *
  * It gates **starting** work, not finishing it. A catalogue crawl that outlives the
  * pull's wait is billed at the moment it starts and collected later, so a pull that
  * finds one waiting collects it even inside the window — see `pull`.
  */
-export const PULL_REFRESH_INTERVAL_MS = 20 * 60 * 1000;
+export const PULL_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 /** Stored, so refreshing the browser tab does not hand back a free sweep. */
 const STORAGE_KEY = "workspace:pull-refresh-at";
@@ -34,9 +37,9 @@ const STORAGE_KEY = "workspace:pull-refresh-at";
  * to stay under the cap rather than sit beside it.
  *
  * Firing one read per watched source was the old behaviour, and on a workspace
- * with three suppliers and seven competitors that is ten jobs at once: the account
- * refuses all but the first few, and each refusal surfaces as an error on that
- * source while writing nothing.
+ * with ten competitors that is ten jobs at once: the account refuses all but the
+ * first few, and each refusal surfaces as an error on that source while writing
+ * nothing.
  *
  * Two, not three, since the traffic read joined the sweep: `social-scan`
  * contributes up to two jobs of its own and `traffic-scan` one, and the plan this
@@ -68,7 +71,7 @@ export type PullOutcome =
       mode: "sweep" | "collect";
       /** The workspace-wide scans (search, social, benchmark). Empty when collecting. */
       live: ScanTally;
-      /** The per-source catalogue reads on the supplier and competitor pages. */
+      /** The per-source catalogue reads on the Competition page. */
       site: ScanTally;
       /** Catalogue crawls still working; the next pull collects them. */
       running: number;
@@ -197,9 +200,9 @@ function readStoredPull(): string | null {
 /**
  * One refresh for the whole workspace, shared by every page that pulls.
  *
- * Suppliers, Competition and My Business read the same workspace, so they are
- * refreshed by the same call: there is no per-page reload to drift out of sync,
- * and a pull on any of them leaves the other two already current.
+ * Competition and My Business read the same workspace, so they are refreshed by
+ * the same call: there is no per-page reload to drift out of sync, and a pull on
+ * one leaves the other already current.
  */
 export function RefreshProvider({ children }: { children: ReactNode }) {
   const { data, actions, refresh } = useWorkspace();
@@ -212,12 +215,10 @@ export function RefreshProvider({ children }: { children: ReactNode }) {
   const pull = useCallback(async (): Promise<PullOutcome> => {
     if (running.current) return { status: "busy" };
 
-    const suppliers = data?.suppliers ?? [];
     const competitors = data?.competitors ?? [];
     /** Crawls already billed and not yet read back, so there is something to collect. */
-    const waitingSuppliers = suppliers.filter((supplier) => supplier.siteScanPending);
     const waitingCompetitors = competitors.filter((competitor) => competitor.siteScanPending);
-    const waiting = waitingSuppliers.length + waitingCompetitors.length;
+    const waiting = waitingCompetitors.length;
 
     const insideTheWindow =
       lastRefreshedAt !== null &&
@@ -264,24 +265,14 @@ export function RefreshProvider({ children }: { children: ReactNode }) {
             // refusing us.
             actions.runBuyList(),
           ];
-      // One read per supplier and competitor, bounded rather than all at once:
-      // each is an actor job, the account caps how many may run together, and a
-      // whole workspace fired in parallel is refused. Each is still bounded by the
-      // same per-run page and dollar caps, and the pull re-reads the workspace once
-      // at the end rather than after every one of them.
+      // One read per competitor, bounded rather than all at once: each is an actor
+      // job, the account caps how many may run together, and a whole workspace fired
+      // in parallel is refused. Each is still bounded by the same per-run page and
+      // dollar caps, and the pull re-reads the workspace once at the end rather than
+      // after every one of them.
       const siteReads = collecting
-        ? [
-            ...waitingSuppliers.map((supplier) => () => actions.scanSupplierSite(supplier.id)),
-            ...waitingCompetitors.map(
-              (competitor) => () => actions.scanCompetitorSite(competitor.id),
-            ),
-          ]
-        : [
-            ...suppliers.map((supplier) => () => actions.scanSupplierSite(supplier.id)),
-            ...competitors.map(
-              (competitor) => () => actions.scanCompetitorSite(competitor.id),
-            ),
-          ];
+        ? waitingCompetitors.map((competitor) => () => actions.scanCompetitorSite(competitor.id))
+        : competitors.map((competitor) => () => actions.scanCompetitorSite(competitor.id));
 
       const [liveSettled, siteSettled] = await Promise.all([
         Promise.allSettled(live),

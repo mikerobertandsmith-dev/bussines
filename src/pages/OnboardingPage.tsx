@@ -15,7 +15,6 @@ import {
   Store,
   Target,
   Trash2,
-  Truck,
   Users,
 } from "lucide-react";
 import {
@@ -24,7 +23,6 @@ import {
   CardHead,
   CheckboxChip,
   Field,
-  Segmented,
   btnGhost,
   btnPrimary,
   inputClass,
@@ -63,7 +61,6 @@ import type {
 const STEPS = [
   { id: "business", title: "Your business", body: "Who you are and what you sell", icon: <Building2 size={16} /> },
   { id: "presence", title: "Online presence", body: "Your site, socials and ad channels", icon: <Globe2 size={16} /> },
-  { id: "suppliers", title: "Suppliers", body: "The sites whose stock you watch", icon: <Truck size={16} /> },
   { id: "competitors", title: "Competitors", body: "The businesses you track", icon: <Target size={16} /> },
   { id: "clients", title: "Clients & messaging", body: "Who gets your updates", icon: <Mail size={16} /> },
   { id: "goals", title: "Goals & confirm", body: "What winning looks like", icon: <CheckCircle2 size={16} /> },
@@ -102,8 +99,6 @@ export function OnboardingPage() {
     socialHandles: {},
     notificationEmail: email,
     reportDay: "Friday",
-    supplierCadence: "daily",
-    suppliers: [emptySource("daily")],
     competitors: [emptySource("daily")],
     clientCadence: "weekly",
     clientMessageTypes: ["new_stock", "deals"],
@@ -139,7 +134,6 @@ export function OnboardingPage() {
     accepted,
   } = useSuggestionChoices(discovery);
 
-  const filledSuppliers = form.suppliers.filter((s) => s.name.trim() || s.website.trim());
   const filledCompetitors = form.competitors.filter((c) => c.name.trim() || c.website.trim());
   const filledClients = form.seedClients.filter((c) => c.email.trim());
   const recordedSocials = filledCompetitors.reduce(
@@ -150,26 +144,20 @@ export function OnboardingPage() {
   const stepError = useMemo(() => {
     if (step === 0 && !form.brandName.trim()) return "Enter your business name to continue.";
     if (step === 0 && !form.industry.trim()) return "Pick the industry you sell in.";
-    if (step === 2 && filledSuppliers.length === 0)
-      return "Add at least one supplier site so we know what to monitor.";
-    if (step === 2 && filledSuppliers.some((s) => !s.website.trim()))
-      return "Every supplier needs a website address.";
+    if (step === 2 && filledCompetitors.some((c) => !c.website.trim()))
+      return "Every competitor needs a website address.";
     // Checked here rather than after normalising, at submit: a domain that cannot
     // be read as one is caught while the user is still on the step, instead of
     // being stored as an empty website no scan can open.
-    if (step === 2 && filledSuppliers.some((s) => !normaliseWebsite(s.website)))
-      return "That supplier website does not look like a web address — try supplier.com.";
-    if (step === 3 && filledCompetitors.some((c) => !c.website.trim()))
-      return "Every competitor needs a website address.";
-    if (step === 3 && filledCompetitors.some((c) => !normaliseWebsite(c.website)))
+    if (step === 2 && filledCompetitors.some((c) => !normaliseWebsite(c.website)))
       return "That competitor website does not look like a web address — try rival.com.";
-    if (step === 4 && form.clientMessageTypes.length === 0)
+    if (step === 3 && form.clientMessageTypes.length === 0)
       return "Choose at least one kind of message your clients receive.";
     return null;
-  }, [step, form, filledSuppliers, filledCompetitors]);
+  }, [step, form, filledCompetitors]);
 
   function updateSource(
-    key: "suppliers" | "competitors",
+    key: "competitors",
     index: number,
     changes: Partial<MonitoringSourceInput>,
   ) {
@@ -178,15 +166,15 @@ export function OnboardingPage() {
     } as Partial<OnboardingInput>);
   }
 
-  function addSource(key: "suppliers" | "competitors") {
+  function addSource(key: "competitors") {
     patch({
-      [key]: [...form[key], emptySource(form.supplierCadence)],
+      [key]: [...form[key], emptySource("daily")],
     } as Partial<OnboardingInput>);
   }
 
-  function removeSource(key: "suppliers" | "competitors", index: number) {
+  function removeSource(key: "competitors", index: number) {
     const next = form[key].filter((_, i) => i !== index);
-    patch({ [key]: next.length ? next : [emptySource(form.supplierCadence)] } as Partial<OnboardingInput>);
+    patch({ [key]: next.length ? next : [emptySource("daily")] } as Partial<OnboardingInput>);
   }
 
   function toggleSocials(index: number) {
@@ -331,11 +319,10 @@ export function OnboardingPage() {
         ...form,
         notificationEmail: form.notificationEmail || email,
         loginEmail: form.loginEmail || email,
-        // One normaliser for the whole app, so a site typed as "supplier.com" is
+        // One normaliser for the whole app, so a site typed as "rival.com" is
         // stored as the same URL the add/edit forms would store. Without it, the
-        // same supplier can arrive twice under two spellings, and a scrape built
+        // same competitor can arrive twice under two spellings, and a scrape built
         // from a bare host is not a URL at all.
-        suppliers: filledSuppliers.map((s) => ({ ...s, website: normaliseWebsite(s.website) })),
         competitors: filledCompetitors.map((c) => ({ ...c, website: normaliseWebsite(c.website) })),
         seedClients: filledClients,
       });
@@ -414,7 +401,7 @@ export function OnboardingPage() {
                 <CardHead
                   icon={<Building2 size={16} />}
                   title="Tell us about your business"
-                  subtitle="This drives which suppliers, competitors and keywords we monitor"
+                  subtitle="This drives which competitors and keywords we monitor"
                 />
                 <div className="grid gap-3 px-4 py-4 sm:grid-cols-2">
                   <Field label="Business / brand name">
@@ -609,83 +596,6 @@ export function OnboardingPage() {
             ) : null}
 
             {step === 2 ? (
-              <Card>
-                <CardHead
-                  icon={<Truck size={16} />}
-                  title="Which supplier sites should we watch?"
-                  subtitle="Their catalogues, prices and stock levels are checked on the cadence you choose"
-                />
-                <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-3">
-                  <span className="text-xs text-slate-500">Default check frequency</span>
-                  <Segmented
-                    size="sm"
-                    value={form.supplierCadence}
-                    onChange={(v: Cadence) =>
-                      patch({
-                        supplierCadence: v,
-                        suppliers: form.suppliers.map((s) => ({ ...s, cadence: v })),
-                      })
-                    }
-                    options={[
-                      { value: "daily", label: "Daily" },
-                      { value: "weekly", label: "Weekly" },
-                      { value: "monthly", label: "Monthly" },
-                    ]}
-                  />
-                </div>
-
-                <div className="space-y-3 px-4 py-4">
-                  {form.suppliers.map((source, index) => (
-                    <div
-                      key={`supplier-${index}`}
-                      className="grid gap-3 rounded-xl border border-slate-200 p-3 sm:grid-cols-[1fr_1.2fr_1fr_auto]"
-                    >
-                      <Field label="Supplier name">
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. Lumière Cosmetics Supply"
-                          value={source.name}
-                          onChange={(e) => updateSource("suppliers", index, { name: e.target.value })}
-                        />
-                      </Field>
-                      <Field label="Website / catalogue URL">
-                        <input
-                          className={inputClass}
-                          placeholder="https://supplier.com/wholesale"
-                          value={source.website}
-                          onChange={(e) => updateSource("suppliers", index, { website: e.target.value })}
-                        />
-                      </Field>
-                      <Field label="Products supplied">
-                        <input
-                          className={inputClass}
-                          placeholder="e.g. lip kits, serums"
-                          value={source.category}
-                          onChange={(e) =>
-                            updateSource("suppliers", index, { category: e.target.value })
-                          }
-                        />
-                      </Field>
-                      <div className="flex items-end">
-                        <button
-                          type="button"
-                          onClick={() => removeSource("suppliers", index)}
-                          className="rounded-lg border border-slate-300 p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"
-                          aria-label="Remove supplier"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                  <button type="button" className={btnGhost} onClick={() => addSource("suppliers")}>
-                    <Plus size={14} /> Add another supplier
-                  </button>
-                </div>
-              </Card>
-            ) : null}
-
-            {step === 3 ? (
               <Card>
                 <CardHead
                   icon={<Target size={16} />}
@@ -919,7 +829,7 @@ export function OnboardingPage() {
               </Card>
             ) : null}
 
-            {step === 4 ? (
+            {step === 3 ? (
               <Card>
                 <CardHead
                   icon={<Users size={16} />}
@@ -1070,7 +980,7 @@ export function OnboardingPage() {
               </Card>
             ) : null}
 
-            {step === 5 ? (
+            {step === 4 ? (
               <Card>
                 <CardHead
                   icon={<Store size={16} />}
@@ -1132,7 +1042,6 @@ export function OnboardingPage() {
                       { label: "Industry", value: form.industry },
                       { label: "Website", value: form.primaryDomain || "—" },
                       { label: "Alerts to", value: form.notificationEmail || email || "—" },
-                      { label: "Suppliers monitored", value: `${filledSuppliers.length}` },
                       { label: "Competitors monitored", value: `${filledCompetitors.length}` },
                       { label: "Social profiles recorded", value: `${recordedSocials}` },
                       { label: "Clients receiving updates", value: `${filledClients.length}` },

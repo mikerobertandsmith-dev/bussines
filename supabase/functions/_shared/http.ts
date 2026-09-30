@@ -35,8 +35,8 @@ function providerOf(url: string): string {
  *
  * `Provider request failed (403)` is technically accurate and practically
  * useless: it is what the pages showed on 2026-09-29 while **every** Apify-backed
- * panel looked broken — supplier catalogue reads, competitor inventory, social,
- * traffic and advertising all at once — because the account had spent its $5
+ * panel looked broken — competitor inventory, social, traffic and advertising all
+ * at once — because the account had spent its $5
  * monthly allowance ($5.07). Nothing said so, so the most useful thing this
  * function does is distinguish the two refusals that are nobody's bug and not
  * worth retrying:

@@ -13,7 +13,6 @@ import {
   Menu,
   RefreshCw,
   Share2,
-  Truck,
   X,
 } from "lucide-react";
 import type { RouteId } from "../lib/hooks";
@@ -21,7 +20,7 @@ import { buildAlerts, buildHealthAlerts, mergeAlerts } from "../lib/alerts";
 import { authEnabled, dbEnabled, demoMode } from "../lib/env";
 import { PROVIDER_CATALOG, buildUsageBars, buildWorkspaceHealth } from "../lib/integrations";
 import { useWorkspace } from "../lib/workspace";
-import { daysAgo, relativeTime, titleCase, usd } from "../lib/format";
+import { relativeTime, titleCase, usd } from "../lib/format";
 import { LogoUpload } from "./LogoUpload";
 import { Modal } from "./Modal";
 import { Badge, Logo, Meter, btnGhost, btnPrimary } from "./primitives";
@@ -33,12 +32,6 @@ const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
   {
     label: "Monitor",
     items: [
-      {
-        id: "suppliers",
-        label: "Suppliers",
-        hint: "New stock & price changes",
-        icon: <Truck size={17} />,
-      },
       {
         id: "competition",
         label: "Competition",
@@ -111,10 +104,6 @@ function LogoutButton({ collapsed }: { collapsed: boolean }) {
 }
 
 export const PAGE_META: Record<RouteId, { title: string; subtitle: string }> = {
-  suppliers: {
-    title: "Supplier updates",
-    subtitle: "What changed on your supplier sites, and the inventory they added",
-  },
   competition: {
     title: "Competition watch",
     subtitle: "Traffic, keyword gaps, ads, reviews and the audiences they target",
@@ -183,9 +172,6 @@ export function Layout({
   );
 
   const badges: Record<RouteId, number> = {
-    suppliers: data
-      ? data.supplierItems.filter((i) => new Date(i.detectedAt) > new Date(daysAgo(2))).length
-      : 0,
     competition: data
       ? data.competitors.flatMap((c) => c.ads).filter((a) => a.status === "active").length
       : 0,
@@ -383,7 +369,7 @@ export function Layout({
           <main className="flex-1 px-4 py-5 sm:px-6">{children}</main>
 
           <footer className="border-t border-slate-200 px-4 py-4 text-[11px] text-slate-400 sm:px-6">
-            {brand} · supplier, competitor and client monitoring workspace.{" "}
+            {brand} · competitor and client monitoring workspace.{" "}
             {demoMode
               ? "Demo mode: connect Clerk and Supabase to run on your own data."
               : "Scans run on the cadence set per source; email sends are logged to your workspace."}
@@ -571,7 +557,7 @@ export function Layout({
 
           <p className="text-[11px] text-slate-500">
             Other business details come from your setup answers. Re-run setup from the workspace to
-            change suppliers, competitors and clients.
+            change competitors and clients.
           </p>
         </div>
       </Modal>

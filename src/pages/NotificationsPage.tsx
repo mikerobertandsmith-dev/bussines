@@ -15,7 +15,6 @@ const FILTERS: { value: NotifFilter; label: string }[] = [
 ];
 
 const PAGE_LABEL: Record<RouteId, string> = {
-  suppliers: "Suppliers",
   competition: "Competition",
   clients: "Clients",
   business: "My business",
